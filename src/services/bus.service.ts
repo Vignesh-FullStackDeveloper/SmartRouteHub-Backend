@@ -16,7 +16,6 @@ export class BusService {
     assigned_route_id?: string;
     metadata?: Record<string, any>;
   }, organizationId: string): Promise<Bus> {
-    // Check if bus number already exists
     const exists = await this.repository.checkBusNumberExists(data.bus_number, organizationId);
     if (exists) {
       throw new Error('Bus number already exists');
@@ -43,7 +42,6 @@ export class BusService {
   }): Promise<any[]> {
     const buses = await this.repository.findAll(organizationId, filters);
     
-    // Enrich with driver and route info
     return Promise.all(
       buses.map(async (bus) => {
         if (bus.driver_id) {
@@ -62,8 +60,15 @@ export class BusService {
     return bus;
   }
 
+  async getByDriverId(driverId: string, organizationId: string): Promise<any[]> {
+    const bus = await this.repository.findByDriverId(driverId, organizationId);
+    if (!bus) {
+      return [];
+    }
+    return [await this.repository.getWithDriverAndRoute(bus.id, organizationId)];
+  }
+
   async update(id: string, data: Partial<Bus>, organizationId: string): Promise<Bus> {
-    // Check bus number uniqueness if being updated
     if (data.bus_number) {
       const exists = await this.repository.checkBusNumberExists(data.bus_number, organizationId, id);
       if (exists) {

@@ -1,7 +1,10 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { MapsService } from '../services/maps.service';
-import { authenticate, requirePermission } from '../middleware/auth';
+import { authenticate } from '../middleware/auth';
+import { hasPermission } from '../rbac/hasPermission';
+import { PERMISSIONS } from '../rbac/permissions';
+import { JWTUser } from '../types';
 
 const geocodeSchema = z.object({
   address: z.string().min(1),
@@ -34,7 +37,7 @@ export async function mapsRoutes(fastify: FastifyInstance) {
   fastify.post(
     '/route/calculate',
     {
-      preHandler: [authenticate, requirePermission('route', 'read')],
+      preHandler: [authenticate],
       schema: {
         description: 'Calculate route distance and duration using Google Maps',
         tags: ['Maps'],
@@ -43,6 +46,11 @@ export async function mapsRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.ROUTE.GET)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
         const data = calculateRouteSchema.parse(request.body);
         const result = await mapsService.calculateRoute(data);
         reply.send(result);
@@ -57,7 +65,7 @@ export async function mapsRoutes(fastify: FastifyInstance) {
   fastify.post(
     '/geocode',
     {
-      preHandler: [authenticate, requirePermission('route', 'read')],
+      preHandler: [authenticate],
       schema: {
         description: 'Geocode address to coordinates',
         tags: ['Maps'],
@@ -66,6 +74,11 @@ export async function mapsRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.ROUTE.GET)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
         const data = geocodeSchema.parse(request.body);
         const result = await mapsService.geocode(data.address);
         reply.send(result);
@@ -80,7 +93,7 @@ export async function mapsRoutes(fastify: FastifyInstance) {
   fastify.post(
     '/reverse-geocode',
     {
-      preHandler: [authenticate, requirePermission('route', 'read')],
+      preHandler: [authenticate],
       schema: {
         description: 'Reverse geocode coordinates to address',
         tags: ['Maps'],
@@ -89,6 +102,11 @@ export async function mapsRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.ROUTE.GET)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
         const data = reverseGeocodeSchema.parse(request.body);
         const result = await mapsService.reverseGeocode(data.latitude, data.longitude);
         reply.send(result);

@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { SuperAdminService } from '../services/superadmin.service';
-import { authenticate, requireRole } from '../middleware/auth';
+import { authenticate } from '../middleware/auth';
+import { JWTUser } from '../types';
 
 export async function superadminRoutes(fastify: FastifyInstance) {
   const superAdminService = new SuperAdminService();
@@ -9,7 +10,7 @@ export async function superadminRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/organizations',
     {
-      preHandler: [authenticate, requireRole(['superadmin'])],
+      preHandler: [authenticate],
       schema: {
         description: 'Get all organizations (superadmin only)',
         tags: ['SuperAdmin'],
@@ -18,6 +19,11 @@ export async function superadminRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (user.role !== 'superadmin') {
+          return reply.code(403).send({ error: 'Forbidden: Superadmin access required' });
+        }
+
         const organizations = await superAdminService.getAllOrganizations();
         reply.send({
           count: organizations.length,
@@ -33,16 +39,22 @@ export async function superadminRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/organizations/:id',
     {
-      preHandler: [authenticate, requireRole(['superadmin'])],
+      preHandler: [authenticate],
       schema: {
         description: 'Get organization details with statistics (superadmin only)',
         tags: ['SuperAdmin'],
         security: [{ bearerAuth: [] }],
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const details = await superAdminService.getOrganizationDetails(request.params.id);
+        const user = request.user as JWTUser;
+        if (user.role !== 'superadmin') {
+          return reply.code(403).send({ error: 'Forbidden: Superadmin access required' });
+        }
+
+        const params = request.params as { id: string };
+        const details = await superAdminService.getOrganizationDetails(params.id);
         reply.send(details);
       } catch (error: any) {
         reply.code(error.message.includes('not found') ? 404 : 500).send({ error: error.message });
@@ -54,7 +66,7 @@ export async function superadminRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/statistics',
     {
-      preHandler: [authenticate, requireRole(['superadmin'])],
+      preHandler: [authenticate],
       schema: {
         description: 'Get system-wide statistics (superadmin only)',
         tags: ['SuperAdmin'],
@@ -63,6 +75,11 @@ export async function superadminRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (user.role !== 'superadmin') {
+          return reply.code(403).send({ error: 'Forbidden: Superadmin access required' });
+        }
+
         const stats = await superAdminService.getSystemStatistics();
         reply.send(stats);
       } catch (error: any) {

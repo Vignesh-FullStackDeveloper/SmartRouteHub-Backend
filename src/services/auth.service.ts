@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { UserRepository } from '../repositories/user.repository';
 import { DatabaseService } from './database.service';
-import { User, JWTUser } from '../types';
+import { User } from '../types';
 import { logger } from '../config/logger';
 
 export class AuthService {
@@ -22,17 +22,18 @@ export class AuthService {
     try {
       let user: User | null = null;
 
-      // For superadmin, organizationId is not required
-      if (!organizationId) {
-        // Try to find superadmin in main database
+      const hasOrganizationId = organizationId && organizationId.trim() !== '';
+
+      if (!hasOrganizationId) {
         user = await this.userRepository.findByEmail(email, '');
         if (user && user.role !== 'superadmin') {
           throw new Error('Organization code required');
         }
+        if (user && user.role === 'superadmin') {
+          organizationId = null as any; 
+        }
       } else {
-        // Regular user login - check organization's database
         if (organizationCode) {
-          // Connect to organization's database
           const orgDb = this.databaseService.getOrganizationDatabase(organizationCode);
           try {
             logger.debug({
@@ -65,8 +66,8 @@ export class AuthService {
             await orgDb.destroy();
           }
         } else {
-          // Fallback to main database (for backward compatibility)
-          user = await this.userRepository.findByEmail(email, organizationId);
+          
+          user = await this.userRepository.findByEmail(email, organizationId!);
         }
       }
 
@@ -90,7 +91,7 @@ export class AuthService {
       }
 
       // Verify password
-      const isValid = await bcrypt.compare(password, user.password_hash);
+      const isValid = await bcrypt.compare(password, (user as any).password_hash);
       if (!isValid) {
         logger.warn({
           message: 'Invalid password',
@@ -100,9 +101,7 @@ export class AuthService {
         throw new Error('Invalid credentials');
       }
 
-      // Update last login
       if (organizationCode && organizationId) {
-        // Update in organization's database
         const orgDb = this.databaseService.getOrganizationDatabase(organizationCode);
         try {
           await orgDb('users')
@@ -112,21 +111,12 @@ export class AuthService {
           await orgDb.destroy();
         }
       } else {
-        // Update in main database
         await this.userRepository.updateLastLogin(user.id);
       }
 
-      // Generate JWT payload
-      // Note: Users in organization databases don't have organization_id field
-      // Use the organizationId parameter instead
-      const jwtUser: JWTUser = {
-        id: user.id,
-        organization_id: organizationId || (user as any).organization_id || null,
-        email: user.email,
-        role: user.role,
-      };
+ 
 
-      return { user, token: '' }; // Token will be generated in route
+      return { user, token: '' }; 
     } catch (error: any) {
       logger.error({ error: error.message, email, organizationId, organizationCode });
       throw error;

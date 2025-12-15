@@ -1,7 +1,10 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { SubscriptionService } from '../services/subscription.service';
-import { authenticate, requirePermission } from '../middleware/auth';
+import { authenticate } from '../middleware/auth';
+import { hasPermission } from '../rbac/hasPermission';
+import { PERMISSIONS } from '../rbac/permissions';
+import { JWTUser } from '../types';
 
 const createSubscriptionSchema = z.object({
   student_id: z.string().uuid(),
@@ -23,7 +26,7 @@ export async function subscriptionsRoutes(fastify: FastifyInstance) {
   fastify.post(
     '/',
     {
-      preHandler: [authenticate, requirePermission('student', 'update')],
+      preHandler: [authenticate],
       schema: {
         description: 'Create transport subscription for student',
         tags: ['Subscriptions'],
@@ -32,10 +35,15 @@ export async function subscriptionsRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.STUDENT.UPDATE)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
         const data = createSubscriptionSchema.parse(request.body);
         const subscription = await subscriptionService.create(
           data,
-          request.user!.organization_id
+          user.organization_id!
         );
         reply.code(201).send(subscription);
       } catch (error: any) {
@@ -50,20 +58,48 @@ export async function subscriptionsRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/student/:id',
     {
-      preHandler: [authenticate, requirePermission('student', 'read')],
+      preHandler: [authenticate],
       schema: {
         description: 'Get all subscriptions for a student',
         tags: ['Subscriptions'],
         security: [{ bearerAuth: [] }],
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const subscriptions = await subscriptionService.getByStudent(
-          request.params.id,
-          request.user!.organization_id
-        );
-        reply.send(subscriptions);
+        const user = request.user as JWTUser;
+        // Check permissions in descending order of authority
+        if (hasPermission(user, PERMISSIONS.STUDENT.GET_ALL)) {
+          // Highest level: can get subscriptions for any student
+          const params = request.params as { id: string };
+          const subscriptions = await subscriptionService.getByStudent(
+            params.id,
+            user.organization_id!
+          );
+          return reply.send(subscriptions);
+        }
+        
+        if (hasPermission(user, PERMISSIONS.STUDENT.GET)) {
+          // Restricted: parents can only get subscriptions for their own children
+          if (user.role === 'parent') {
+            const { StudentService } = await import('../services/student.service');
+            const studentService = new StudentService();
+            const students = await studentService.getByParentId(user.id, user.organization_id!);
+            const params = request.params as { id: string };
+            const student = students.find(s => s.id === params.id);
+            if (!student) {
+              return reply.code(403).send({ error: 'Forbidden: Can only access own children' });
+            }
+          }
+          const params = request.params as { id: string };
+          const subscriptions = await subscriptionService.getByStudent(
+            params.id,
+            user.organization_id!
+          );
+          return reply.send(subscriptions);
+        }
+        
+        return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
       } catch (error: any) {
         reply.code(500).send({ error: error.message });
       }
@@ -74,32 +110,70 @@ export async function subscriptionsRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/student/:id/active',
     {
-      preHandler: [authenticate, requirePermission('student', 'read')],
+      preHandler: [authenticate],
       schema: {
         description: 'Get active subscription for a student',
         tags: ['Subscriptions'],
         security: [{ bearerAuth: [] }],
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const subscription = await subscriptionService.getActive(
-          request.params.id,
-          request.user!.organization_id
-        );
-        
-        if (!subscription) {
-          reply.send({ 
-            active: false,
-            message: 'No active subscription found' 
-          });
-          return;
-        }
+        const user = request.user as JWTUser;
+        // Check permissions in descending order of authority
+        if (hasPermission(user, PERMISSIONS.STUDENT.GET_ALL)) {
+          // Highest level: can get active subscription for any student
+          const params = request.params as { id: string };
+          const subscription = await subscriptionService.getActive(
+            params.id,
+            user.organization_id!
+          );
+          
+          if (!subscription) {
+            return reply.send({ 
+              active: false,
+              message: 'No active subscription found' 
+            });
+          }
 
-        reply.send({
-          active: true,
-          subscription,
-        });
+          return reply.send({
+            active: true,
+            subscription,
+          });
+        }
+        
+        if (hasPermission(user, PERMISSIONS.STUDENT.GET)) {
+          // Restricted: parents can only get active subscription for their own children
+          if (user.role === 'parent') {
+            const { StudentService } = await import('../services/student.service');
+            const studentService = new StudentService();
+            const students = await studentService.getByParentId(user.id, user.organization_id!);
+            const params = request.params as { id: string };
+            const student = students.find(s => s.id === params.id);
+            if (!student) {
+              return reply.code(403).send({ error: 'Forbidden: Can only access own children' });
+            }
+          }
+          const params = request.params as { id: string };
+          const subscription = await subscriptionService.getActive(
+            params.id,
+            user.organization_id!
+          );
+          
+          if (!subscription) {
+            return reply.send({ 
+              active: false,
+              message: 'No active subscription found' 
+            });
+          }
+
+          return reply.send({
+            active: true,
+            subscription,
+          });
+        }
+        
+        return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
       } catch (error: any) {
         reply.code(500).send({ error: error.message });
       }
@@ -110,20 +184,26 @@ export async function subscriptionsRoutes(fastify: FastifyInstance) {
   fastify.put(
     '/:id',
     {
-      preHandler: [authenticate, requirePermission('student', 'update')],
+      preHandler: [authenticate],
       schema: {
         description: 'Update subscription',
         tags: ['Subscriptions'],
         security: [{ bearerAuth: [] }],
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string }; Body: any }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.STUDENT.UPDATE)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
         const data = updateSubscriptionSchema.parse(request.body);
+        const params = request.params as { id: string };
         const updated = await subscriptionService.update(
-          request.params.id,
+          params.id,
           data,
-          request.user!.organization_id
+          user.organization_id!
         );
         reply.send(updated);
       } catch (error: any) {
@@ -138,7 +218,7 @@ export async function subscriptionsRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/expiring',
     {
-      preHandler: [authenticate, requirePermission('student', 'read')],
+      preHandler: [authenticate],
       schema: {
         description: 'Get subscriptions expiring soon',
         tags: ['Subscriptions'],
@@ -151,11 +231,17 @@ export async function subscriptionsRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    async (request: FastifyRequest<{ Querystring: { days?: number } }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.STUDENT.GET_ALL)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
+        const query = request.query as { days?: number };
         const subscriptions = await subscriptionService.getExpiring(
-          request.user!.organization_id,
-          request.query.days || 30
+          user.organization_id!,
+          query.days || 30
         );
         reply.send({
           expiring_count: subscriptions.length,

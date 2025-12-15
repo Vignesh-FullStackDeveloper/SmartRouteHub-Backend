@@ -107,5 +107,9 @@ export class StudentService {
   async assignToRoute(studentIds: string[], routeId: string, organizationId: string): Promise<number> {
     return this.repository.assignToRoute(studentIds, routeId, organizationId);
   }
+
+  async getByParentId(parentId: string, organizationId: string): Promise<Student[]> {
+    return this.repository.findByParentId(parentId, organizationId);
+  }
 }
 

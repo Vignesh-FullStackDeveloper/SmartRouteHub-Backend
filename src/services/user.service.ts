@@ -1,15 +1,21 @@
 import { UserRepository } from '../repositories/user.repository';
 import { AuthService } from './auth.service';
+import { DatabaseService } from './database.service';
+import { OrganizationService } from './organization.service';
 import { User } from '../types';
 import { logger } from '../config/logger';
 
 export class UserService {
   private repository: UserRepository;
   private authService: AuthService;
+  private databaseService: DatabaseService;
+  private organizationService: OrganizationService;
 
   constructor() {
     this.repository = new UserRepository();
     this.authService = new AuthService();
+    this.databaseService = new DatabaseService();
+    this.organizationService = new OrganizationService();
   }
 
   async create(data: {
@@ -18,17 +24,24 @@ export class UserService {
     phone?: string;
     password: string;
     role: 'admin' | 'driver' | 'parent';
+    role_id?: string; // Custom role ID
     driver_id?: string;
   }, organizationId: string): Promise<User> {
-    // Check if email already exists
-    const emailExists = await this.repository.checkEmailExists(data.email, organizationId);
-    if (emailExists) {
+    // Get organization code to access organization database
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+
+    // Check if email already exists in organization database
+    const existing = await orgDb('users').where({ email: data.email }).first();
+    if (existing) {
       throw new Error('Email already exists');
     }
 
     // Check driver_id if role is driver
     if (data.role === 'driver' && data.driver_id) {
-      const driverExists = await this.repository.findByDriverId(data.driver_id, organizationId);
+      const driverExists = await orgDb('users')
+        .where({ driver_id: data.driver_id, role: 'driver' })
+        .first();
       if (driverExists) {
         throw new Error('Driver ID already exists');
       }
@@ -36,56 +49,129 @@ export class UserService {
 
     const passwordHash = await this.authService.hashPassword(data.password);
 
-    const user = await this.repository.create({
-      name: data.name,
-      email: data.email,
-      phone: data.phone,
-      password_hash: passwordHash,
-      driver_id: data.driver_id,
-      role: data.role,
-      organization_id: organizationId,
-      is_active: true,
-    } as any);
+    // Validate role_id if provided
+    if (data.role_id) {
+      const role = await orgDb('roles')
+        .where({ id: data.role_id })
+        .first();
+      if (!role) {
+        throw new Error('Role not found');
+      }
+    }
+
+    // Create user directly in organization database (no organization_id column)
+    const [user] = await orgDb('users')
+      .insert({
+        name: data.name,
+        email: data.email,
+        phone: data.phone,
+        password_hash: passwordHash,
+        driver_id: data.driver_id,
+        role: data.role,
+        role_id: data.role_id || null,
+        is_active: true,
+      })
+      .returning('*');
 
     logger.info({
       message: 'User created',
       userId: user.id,
       role: user.role,
+      organizationCode: organization.code,
     });
 
-    return user;
+    // Return user with organization_id for consistency
+    return {
+      ...user,
+      organization_id: organizationId,
+    } as User;
   }
 
   async getAll(organizationId: string, filters?: {
     role?: string;
     is_active?: boolean;
   }): Promise<User[]> {
+    // Get organization code to access organization database
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+
+    let query = orgDb('users').select('*');
+
     if (filters?.role) {
-      return this.repository.findByRole(filters.role, organizationId, {
-        is_active: filters.is_active,
-      });
+      query = query.where({ role: filters.role });
     }
-    return this.repository.findAll(organizationId, filters);
+
+    if (filters?.is_active !== undefined) {
+      query = query.where({ is_active: filters.is_active });
+    }
+
+    const users = await query;
+    
+    // Add organization_id to each user for consistency
+    return users.map(user => ({
+      ...user,
+      organization_id: organizationId,
+    })) as User[];
   }
 
   async getById(id: string, organizationId: string): Promise<User> {
-    const user = await this.repository.findById(id, organizationId);
+    // Get organization code to access organization database
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+
+    const user = await orgDb('users')
+      .where({ id })
+      .first();
+
     if (!user) {
       throw new Error('User not found');
     }
-    return user;
+
+    // Add organization_id for consistency
+    return {
+      ...user,
+      organization_id: organizationId,
+    } as User;
   }
 
   async update(id: string, data: Partial<User>, organizationId: string): Promise<User> {
+    // Get organization code to access organization database
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+
     // Check email uniqueness if being updated
     if (data.email) {
-      const emailExists = await this.repository.checkEmailExists(data.email, organizationId, id);
-      if (emailExists) {
+      const existing = await orgDb('users')
+        .where({ email: data.email })
+        .whereNot({ id })
+        .first();
+      if (existing) {
         throw new Error('Email already exists');
       }
     }
 
-    const updated = await this.repository.update(id, data, organizationId);
+    // Validate role_id if being updated
+    if (data.role_id !== undefined) {
+      if (data.role_id) {
+        const role = await orgDb('roles')
+          .where({ id: data.role_id })
+          .first();
+        if (!role) {
+          throw new Error('Role not found');
+        }
+      }
+    }
+
+    // Prepare update data (remove organization_id if present, as it's not in org DB)
+    const updateData: any = { ...data };
+    delete updateData.organization_id;
+
+    // Update user directly in organization database
+    const [updated] = await orgDb('users')
+      .where({ id })
+      .update(updateData)
+      .returning('*');
+
     if (!updated) {
       throw new Error('User not found');
     }
@@ -93,9 +179,40 @@ export class UserService {
     logger.info({
       message: 'User updated',
       userId: updated.id,
+      organizationCode: organization.code,
     });
 
-    return updated;
+    // Return user with organization_id for consistency
+    return {
+      ...updated,
+      organization_id: organizationId,
+    } as User;
+  }
+
+  async delete(id: string, organizationId: string): Promise<void> {
+    // Get organization code to access organization database
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+
+    // Check if user exists
+    const user = await orgDb('users')
+      .where({ id })
+      .first();
+
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    // Delete user from organization database
+    await orgDb('users')
+      .where({ id })
+      .delete();
+
+    logger.info({
+      message: 'User deleted',
+      userId: id,
+      organizationCode: organization.code,
+    });
   }
 }
 

@@ -1,7 +1,11 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { OrganizationService } from '../services/organization.service';
-import { authenticate, requirePermission } from '../middleware/auth';
+import { authenticate } from '../middleware/auth';
+import { hasPermission } from '../rbac/hasPermission';
+import { PERMISSIONS } from '../rbac/permissions';
+import { JWTUser } from '../types';
+import { logger } from '../config/logger';
 
 const createOrgSchema = z.object({
   name: z.string().min(1),
@@ -95,6 +99,15 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const data = createOrgSchema.parse(request.body);
+        
+        // Log request data for debugging
+        logger.info({
+          message: 'Organization creation request received',
+          hasAdmin: !!data.admin,
+          adminEmail: data.admin?.email,
+          code: data.code,
+        });
+        
         const result = await organizationService.create(data);
         
         // Generate token for admin user if created
@@ -107,11 +120,30 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
           };
           const token = fastify.jwt.sign(jwtUser);
           result.admin.token = token;
+          
+          logger.info({
+            message: 'Organization created with admin user',
+            organizationId: result.id,
+            adminUserId: result.admin.user.id,
+          });
+        } else {
+          logger.warn({
+            message: 'Organization created without admin user',
+            organizationId: result.id,
+            code: result.code,
+          });
         }
         
         reply.code(201).send(result);
       } catch (error: any) {
-        reply.code(error.message.includes('already exists') ? 409 : 400).send({ error: error.message });
+        logger.error({
+          message: 'Organization creation failed',
+          error: error.message,
+          stack: error.stack,
+          body: request.body,
+        });
+        const statusCode = error.message.includes('already exists') ? 409 : 500;
+        reply.code(statusCode).send({ error: error.message });
       }
     }
   );
@@ -131,11 +163,12 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    async (request: FastifyRequest<{ Params: { code: string } }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const available = await organizationService.checkCodeAvailable(request.params.code);
+        const params = request.params as { code: string };
+        const available = await organizationService.checkCodeAvailable(params.code);
         reply.send({
-          code: request.params.code,
+          code: params.code,
           available,
         });
       } catch (error: any) {
@@ -148,7 +181,7 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/:id',
     {
-      preHandler: [authenticate, requirePermission('organization', 'read')],
+      preHandler: [authenticate],
       schema: {
         description: 'Get organization by ID',
         tags: ['Organizations'],
@@ -161,17 +194,19 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const organization = await organizationService.getById(
-          request.params.id,
-          request.user?.organization_id
-        );
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.ORGANIZATION.GET)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
 
-        // Verify user belongs to this organization
-        if (request.user?.organization_id !== organization.id && request.user?.role !== 'admin') {
-          reply.code(403).send({ error: 'Access denied' });
-          return;
+        const params = request.params as { id: string };
+        const organization = await organizationService.getById(params.id);
+
+        // Verify user belongs to this organization (unless superadmin)
+        if (user.role !== 'superadmin' && user.organization_id !== organization.id) {
+          return reply.code(403).send({ error: 'Access denied' });
         }
 
         reply.send(organization);
@@ -185,21 +220,28 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
   fastify.put(
     '/:id',
     {
-      preHandler: [authenticate, requirePermission('organization', 'update')],
+      preHandler: [authenticate],
       schema: {
         description: 'Update organization',
         tags: ['Organizations'],
         security: [{ bearerAuth: [] }],
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string }; Body: any }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.ORGANIZATION.UPDATE)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
+        // Verify user belongs to this organization (unless superadmin)
+        const params = request.params as { id: string };
+        if (user.role !== 'superadmin' && user.organization_id !== params.id) {
+          return reply.code(403).send({ error: 'Access denied' });
+        }
+
         const data = updateOrgSchema.parse(request.body);
-        const updated = await organizationService.update(
-          request.params.id,
-          data,
-          request.user?.organization_id
-        );
+        const updated = await organizationService.update(params.id, data);
         reply.send(updated);
       } catch (error: any) {
         const statusCode = error.message.includes('not found') ? 404 :

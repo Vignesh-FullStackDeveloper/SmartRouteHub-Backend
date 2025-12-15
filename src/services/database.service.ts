@@ -244,6 +244,36 @@ export class DatabaseService {
       table.index(['valid_from', 'valid_until']);
     });
 
+    // Create permissions table - organization-specific permissions
+    await db.schema.createTable('permissions', (table) => {
+      table.uuid('id').primary().defaultTo(db.raw('gen_random_uuid()'));
+      table.string('name').notNullable(); // e.g., 'View Buses', 'View Pupils'
+      table.string('code').notNullable(); // e.g., 'view_buses', 'view_pupils'
+      table.text('description').nullable();
+      table.timestamps(true, true);
+      
+      table.unique('code'); // Permission codes must be unique within organization
+      table.index('code');
+    });
+
+    // Create roles table - custom roles per organization
+    await db.schema.createTable('roles', (table) => {
+      table.uuid('id').primary().defaultTo(db.raw('gen_random_uuid()'));
+      table.string('name').notNullable(); // e.g., 'Fleet Manager', 'Route Coordinator'
+      table.text('description').nullable();
+      table.jsonb('permission_ids').notNullable().defaultTo('[]'); // Array of permission IDs
+      table.timestamps(true, true);
+      
+      table.unique('name'); // Role names must be unique within organization
+      table.index('name');
+    });
+
+    // Add role_id to users table to link users to custom roles
+    await db.schema.alterTable('users', (table) => {
+      table.uuid('role_id').nullable().references('id').inTable('roles').onDelete('SET NULL');
+      table.index('role_id');
+    });
+
     logger.info({
       message: 'Organization tables created',
       database: dbName,

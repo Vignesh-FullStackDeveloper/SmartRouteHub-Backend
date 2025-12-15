@@ -26,6 +26,8 @@ import { usersRoutes } from './routes/users.routes';
 import { mapsRoutes } from './routes/maps.routes';
 import { superadminRoutes } from './routes/superadmin.routes';
 import { notificationsRoutes } from './routes/notifications.routes';
+import { permissionsRoutes } from './routes/permissions.routes';
+import { rolesRoutes } from './routes/roles.routes';
 import { connectRedis, disconnectRedis, testRedisConnection } from './config/redis';
 
 async function buildServer() {
@@ -220,6 +222,8 @@ Click the "Authorize" button above and enter: \`Bearer <your-token>\`
   await fastify.register(mapsRoutes, { prefix: '/api/maps' });
   await fastify.register(superadminRoutes, { prefix: '/api/superadmin' });
   await fastify.register(notificationsRoutes, { prefix: '/api/notifications' });
+  await fastify.register(permissionsRoutes, { prefix: '/api/permissions' });
+  await fastify.register(rolesRoutes, { prefix: '/api/roles' });
 
   return fastify;
 }
@@ -288,8 +292,17 @@ async function start() {
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT', () => shutdown('SIGINT'));
 
-  } catch (error) {
-    logger.error({ error, message: 'Failed to start server' });
+  } catch (error: any) {
+    logger.error({ 
+      error: {
+        message: error?.message,
+        stack: error?.stack,
+        code: error?.code,
+        name: error?.name,
+        ...error
+      }, 
+      message: 'Failed to start server' 
+    });
     process.exit(1);
   }
 }

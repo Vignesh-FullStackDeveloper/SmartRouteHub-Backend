@@ -5,6 +5,7 @@ export interface User {
   phone?: string;
   name: string;
   role: 'superadmin' | 'admin' | 'driver' | 'parent';
+  role_id?: string | null; // Custom role ID (for organization-specific roles)
   driver_id?: string;
   is_active: boolean;
   last_login?: Date;
@@ -122,6 +123,7 @@ export interface JWTUser {
   organization_id: string | null; // null for superadmin
   email: string;
   role: 'superadmin' | 'admin' | 'driver' | 'parent';
+  permissions?: string[]; // Array of permission names (e.g., ['student:read', 'bus:create'])
 }
 
 export interface Subscription {
@@ -136,5 +138,24 @@ export interface Subscription {
   notes?: string;
   created_at: Date;
   updated_at: Date;
+}
+
+export interface Permission {
+  id: string;
+  name: string;
+  code: string;
+  description?: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface Role {
+  id: string;
+  name: string;
+  description?: string;
+  permission_ids: string[]; // Array of permission IDs
+  created_at: Date;
+  updated_at: Date;
+  permissions?: Permission[]; // Populated when fetching with permissions
 }
 

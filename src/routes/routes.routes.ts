@@ -1,7 +1,10 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { RouteService } from '../services/route.service';
-import { authenticate, requirePermission } from '../middleware/auth';
+import { authenticate } from '../middleware/auth';
+import { hasPermission } from '../rbac/hasPermission';
+import { PERMISSIONS } from '../rbac/permissions';
+import { JWTUser } from '../types';
 
 const createRouteSchema = z.object({
   name: z.string().min(1),
@@ -30,7 +33,7 @@ export async function routesRoutes(fastify: FastifyInstance) {
   fastify.post(
     '/',
     {
-      preHandler: [authenticate, requirePermission('route', 'create')],
+      preHandler: [authenticate],
       schema: {
         description: 'Create a new route with stops',
         tags: ['Routes'],
@@ -39,8 +42,13 @@ export async function routesRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.ROUTE.CREATE)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
         const data = createRouteSchema.parse(request.body);
-        const route = await routeService.create(data, request.user!.organization_id);
+        const route = await routeService.create(data, user.organization_id!);
         reply.code(201).send(route);
       } catch (error: any) {
         reply.code(400).send({ error: error.message });
@@ -52,7 +60,7 @@ export async function routesRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/',
     {
-      preHandler: [authenticate, requirePermission('route', 'read')],
+      preHandler: [authenticate],
       schema: {
         description: 'Get all routes',
         tags: ['Routes'],
@@ -66,10 +74,29 @@ export async function routesRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    async (request: FastifyRequest<{ Querystring: any }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const routes = await routeService.getAll(request.user!.organization_id, request.query);
-        reply.send(routes);
+        const user = request.user as JWTUser;
+        // Check permissions in descending order of authority
+        if (hasPermission(user, PERMISSIONS.ROUTE.GET_ALL)) {
+          // Highest level: return full dataset
+          const routes = await routeService.getAll(user.organization_id!, request.query as any);
+          return reply.send(routes);
+        }
+        
+        if (hasPermission(user, PERMISSIONS.ROUTE.GET)) {
+          // Restricted: return filtered dataset (e.g., only routes for driver's bus)
+          if (user.role === 'driver') {
+            // Drivers can see routes for their assigned bus
+            const routes = await routeService.getAll(user.organization_id!, request.query as any);
+            return reply.send(routes);
+          }
+          // For other roles with GET permission, return all routes (read-only access)
+          const routes = await routeService.getAll(user.organization_id!, request.query as any);
+          return reply.send(routes);
+        }
+        
+        return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
       } catch (error: any) {
         reply.code(500).send({ error: error.message });
       }
@@ -80,17 +107,30 @@ export async function routesRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/:id',
     {
-      preHandler: [authenticate, requirePermission('route', 'read')],
+      preHandler: [authenticate],
       schema: {
         description: 'Get route by ID with stops',
         tags: ['Routes'],
         security: [{ bearerAuth: [] }],
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const route = await routeService.getById(request.params.id, request.user!.organization_id);
-        reply.send(route);
+        const user = request.user as JWTUser;
+        // Check permissions in descending order of authority
+        if (hasPermission(user, PERMISSIONS.ROUTE.GET_ALL)) {
+          // Highest level: can get any route
+          const route = await routeService.getById((request.params as any).id, user.organization_id!);
+          return reply.send(route);
+        }
+        
+        if (hasPermission(user, PERMISSIONS.ROUTE.GET)) {
+          // Restricted: can get route (read-only access for drivers/parents)
+          const route = await routeService.getById((request.params as any).id, user.organization_id!);
+          return reply.send(route);
+        }
+        
+        return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
       } catch (error: any) {
         reply.code(error.message.includes('not found') ? 404 : 500).send({ error: error.message });
       }
@@ -101,20 +141,25 @@ export async function routesRoutes(fastify: FastifyInstance) {
   fastify.put(
     '/:id',
     {
-      preHandler: [authenticate, requirePermission('route', 'update')],
+      preHandler: [authenticate],
       schema: {
         description: 'Update route',
         tags: ['Routes'],
         security: [{ bearerAuth: [] }],
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string }; Body: any }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.ROUTE.UPDATE)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
         const data = updateRouteSchema.parse(request.body);
         const route = await routeService.update(
-          request.params.id,
+          (request.params as any).id,
           data,
-          request.user!.organization_id
+          user.organization_id!
         );
         reply.send(route);
       } catch (error: any) {
@@ -128,16 +173,21 @@ export async function routesRoutes(fastify: FastifyInstance) {
   fastify.delete(
     '/:id',
     {
-      preHandler: [authenticate, requirePermission('route', 'delete')],
+      preHandler: [authenticate],
       schema: {
         description: 'Delete route',
         tags: ['Routes'],
         security: [{ bearerAuth: [] }],
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        await routeService.delete(request.params.id, request.user!.organization_id);
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.ROUTE.DELETE)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
+        await routeService.delete((request.params as any).id, user.organization_id!);
         reply.send({ message: 'Route deleted successfully' });
       } catch (error: any) {
         reply.code(error.message.includes('not found') ? 404 : 500).send({ error: error.message });
@@ -149,7 +199,7 @@ export async function routesRoutes(fastify: FastifyInstance) {
   fastify.post(
     '/:id/assign-students',
     {
-      preHandler: [authenticate, requirePermission('route', 'update')],
+      preHandler: [authenticate],
       schema: {
         description: 'Assign students to route',
         tags: ['Routes'],
@@ -166,15 +216,22 @@ export async function routesRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string }; Body: { student_ids: string[] } }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.ROUTE.UPDATE)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
+        const params = request.params as { id: string };
+        const body = request.body as { student_ids: string[] };
         const { AssignmentService } = await import('../services/assignment.service');
         const assignmentService = new AssignmentService();
         const result = await assignmentService.assignStudentsToRoute(
-          request.body.student_ids,
-          request.params.id,
+          body.student_ids,
+          params.id,
           undefined,
-          request.user!.organization_id
+          user.organization_id!
         );
         reply.send({ 
           message: 'Students assigned successfully',

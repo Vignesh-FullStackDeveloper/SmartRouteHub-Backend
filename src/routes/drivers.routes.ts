@@ -1,7 +1,10 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { DriverService } from '../services/driver.service';
-import { authenticate, requirePermission } from '../middleware/auth';
+import { authenticate } from '../middleware/auth';
+import { hasPermission } from '../rbac/hasPermission';
+import { PERMISSIONS } from '../rbac/permissions';
+import { JWTUser } from '../types';
 
 const createDriverSchema = z.object({
   name: z.string().min(1),
@@ -28,7 +31,7 @@ export async function driversRoutes(fastify: FastifyInstance) {
   fastify.post(
     '/',
     {
-      preHandler: [authenticate, requirePermission('user', 'create')],
+      preHandler: [authenticate],
       schema: {
         description: 'Create a new driver',
         tags: ['Drivers'],
@@ -37,8 +40,13 @@ export async function driversRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.USER.CREATE)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
         const data = createDriverSchema.parse(request.body);
-        const driver = await driverService.create(data, request.user!.organization_id);
+        const driver = await driverService.create(data, user.organization_id!);
         reply.code(201).send(driver);
       } catch (error: any) {
         const statusCode = error.message.includes('already exists') ? 409 : 400;
@@ -51,7 +59,7 @@ export async function driversRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/',
     {
-      preHandler: [authenticate, requirePermission('user', 'read')],
+      preHandler: [authenticate],
       schema: {
         description: 'Get all drivers',
         tags: ['Drivers'],
@@ -65,10 +73,27 @@ export async function driversRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    async (request: FastifyRequest<{ Querystring: any }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const drivers = await driverService.getAll(request.user!.organization_id, request.query);
-        reply.send(drivers);
+        const user = request.user as JWTUser;
+        // Check permissions in descending order of authority
+        if (hasPermission(user, PERMISSIONS.USER.GET_ALL)) {
+          // Highest level: return full dataset
+          const drivers = await driverService.getAll(user.organization_id!, request.query as any);
+          return reply.send(drivers);
+        }
+        
+        if (hasPermission(user, PERMISSIONS.USER.GET)) {
+          // Restricted: return filtered dataset (e.g., only own driver info if user is a driver)
+          if (user.role === 'driver') {
+            const driver = await driverService.getById(user.id, user.organization_id!);
+            return reply.send([driver]);
+          }
+          // For other roles with GET permission, return empty or limited data
+          return reply.send([]);
+        }
+        
+        return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
       } catch (error: any) {
         reply.code(500).send({ error: error.message });
       }
@@ -79,17 +104,35 @@ export async function driversRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/:id',
     {
-      preHandler: [authenticate, requirePermission('user', 'read')],
+      preHandler: [authenticate],
       schema: {
         description: 'Get driver by ID',
         tags: ['Drivers'],
         security: [{ bearerAuth: [] }],
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const driver = await driverService.getById(request.params.id, request.user!.organization_id);
-        reply.send(driver);
+        const user = request.user as JWTUser;
+        // Check permissions in descending order of authority
+        if (hasPermission(user, PERMISSIONS.USER.GET_ALL)) {
+          // Highest level: can get any driver
+          const params = request.params as { id: string };
+          const driver = await driverService.getById(params.id, user.organization_id!);
+          return reply.send(driver);
+        }
+        
+        if (hasPermission(user, PERMISSIONS.USER.GET)) {
+          // Restricted: can only get own driver info
+          const params = request.params as { id: string };
+          if (user.role === 'driver' && params.id === user.id) {
+            const driver = await driverService.getById(params.id, user.organization_id!);
+            return reply.send(driver);
+          }
+          return reply.code(403).send({ error: 'Forbidden: Can only access own driver information' });
+        }
+        
+        return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
       } catch (error: any) {
         reply.code(error.message.includes('not found') ? 404 : 500).send({ error: error.message });
       }
@@ -100,20 +143,31 @@ export async function driversRoutes(fastify: FastifyInstance) {
   fastify.put(
     '/:id',
     {
-      preHandler: [authenticate, requirePermission('user', 'update')],
+      preHandler: [authenticate],
       schema: {
         description: 'Update driver',
         tags: ['Drivers'],
         security: [{ bearerAuth: [] }],
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string }; Body: any }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.USER.UPDATE)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
+        // Additional check: drivers can only update themselves
+        const params = request.params as { id: string };
+        if (user.role === 'driver' && params.id !== user.id) {
+          return reply.code(403).send({ error: 'Forbidden: Can only update own driver information' });
+        }
+
         const data = updateDriverSchema.parse(request.body);
         const updated = await driverService.update(
-          request.params.id,
+          params.id,
           data,
-          request.user!.organization_id
+          user.organization_id!
         );
         reply.send(updated);
       } catch (error: any) {
@@ -128,20 +182,41 @@ export async function driversRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/:id/schedule',
     {
-      preHandler: [authenticate, requirePermission('user', 'read')],
+      preHandler: [authenticate],
       schema: {
         description: 'Get driver schedule',
         tags: ['Drivers'],
         security: [{ bearerAuth: [] }],
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const schedule = await driverService.getSchedule(
-          request.params.id,
-          request.user!.organization_id
-        );
-        reply.send(schedule);
+        const user = request.user as JWTUser;
+        // Check permissions in descending order of authority
+        if (hasPermission(user, PERMISSIONS.USER.GET_ALL)) {
+          // Highest level: can get any driver's schedule
+          const params = request.params as { id: string };
+          const schedule = await driverService.getSchedule(
+            params.id,
+            user.organization_id!
+          );
+          return reply.send(schedule);
+        }
+        
+        if (hasPermission(user, PERMISSIONS.USER.GET)) {
+          // Restricted: can only get own schedule
+          const params = request.params as { id: string };
+          if (user.role === 'driver' && params.id === user.id) {
+            const schedule = await driverService.getSchedule(
+              params.id,
+              user.organization_id!
+            );
+            return reply.send(schedule);
+          }
+          return reply.code(403).send({ error: 'Forbidden: Can only access own schedule' });
+        }
+        
+        return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
       } catch (error: any) {
         reply.code(error.message.includes('not found') ? 404 : 500).send({ error: error.message });
       }

@@ -1,12 +1,16 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import { db } from '../config/database';
 import { JWTUser } from '../types';
+import { DatabaseService } from '../services/database.service';
+import { OrganizationService } from '../services/organization.service';
 
-declare module 'fastify' {
-  interface FastifyRequest {
-    user?: JWTUser;
+declare module '@fastify/jwt' {
+  interface FastifyJWT {
+    user: JWTUser;
   }
 }
+
+const databaseService = new DatabaseService();
+const organizationService = new OrganizationService();
 
 export async function authenticate(
   request: FastifyRequest,
@@ -15,18 +19,67 @@ export async function authenticate(
   try {
     await request.jwtVerify();
     const user = request.user as JWTUser;
+    console.log('user ####', user);
+    let permissions: string[] = [];
     
-    // Verify user still exists and is active
-    // For superadmin, organization_id can be null
-    const query = db('users').where({ id: user.id, is_active: true });
-    if (user.organization_id) {
-      query.where({ organization_id: user.organization_id });
-    }
-    const dbUser = await query.first();
-    
-    if (!dbUser) {
-      reply.code(401).send({ error: 'User not found or inactive' });
+    if (user.role === 'superadmin') {
+      // Superadmin has all permissions
+      request.user = {
+        id: user.id,
+        organization_id: user.organization_id,
+        email: user.email,
+        role: user.role,
+        permissions: [],
+      };
       return;
+    }
+    
+    // For organization users, get permissions from their role in organization database
+    if (user.organization_id) {
+      try {
+        // Get organization code
+        const organization = await organizationService.getById(user.organization_id);
+        const orgDb = databaseService.getOrganizationDatabase(organization.code);
+        
+        // Get user from organization database
+        const dbUser = await orgDb('users')
+          .where({ id: user.id, is_active: true })
+          .first();
+        
+        if (!dbUser) {
+          reply.code(401).send({ error: 'User not found or inactive' });
+          return;
+        }
+        
+        // Get permissions from user's assigned role
+        if (dbUser.role_id) {
+          const role = await orgDb('roles')
+            .where({ id: dbUser.role_id })
+            .first();
+          
+          if (role) {
+            // Get permission IDs from role's permission_ids array
+            const permissionIds = Array.isArray(role.permission_ids) 
+              ? role.permission_ids 
+              : (typeof role.permission_ids === 'string' ? JSON.parse(role.permission_ids) : []);
+            
+            if (permissionIds.length > 0) {
+              const permissionRecords = await orgDb('permissions')
+                .whereIn('id', permissionIds)
+                .select('code');
+              
+              permissions = permissionRecords.map((p: any) => p.code);
+            }
+          }
+        } else {
+          // User must have a role assigned to access permissions
+          // Return empty permissions - they must have a role_id
+          permissions = [];
+        }
+      } catch (error: any) {
+        // If organization database doesn't exist or error, return empty permissions
+        permissions = [];
+      }
     }
     
     request.user = {
@@ -34,6 +87,7 @@ export async function authenticate(
       organization_id: user.organization_id,
       email: user.email,
       role: user.role,
+      permissions,
     };
   } catch (err) {
     reply.code(401).send({ error: 'Unauthorized' });
@@ -49,7 +103,6 @@ export function requireRole(
       return;
     }
     
-    // Superadmin has access to everything
     if (request.user.role === 'superadmin') {
       return;
     }
@@ -71,16 +124,16 @@ export function requirePermission(
       return;
     }
     
-    const permission = await db('role_permissions')
-      .join('permissions', 'role_permissions.permission_id', 'permissions.id')
-      .where({
-        'role_permissions.role': request.user.role,
-        'permissions.resource': resource,
-        'permissions.action': action,
-      })
-      .first();
+    // Superadmin has all permissions
+    if (request.user.role === 'superadmin') {
+      return;
+    }
     
-    if (!permission) {
+    // Check if user has the required permission (permission code)
+    const permissionName = `${resource}:${action}`;
+    const hasPermission = request.user.permissions?.includes(permissionName);
+    
+    if (!hasPermission) {
       reply.code(403).send({ 
         error: `Forbidden: No permission to ${action} ${resource}` 
       });

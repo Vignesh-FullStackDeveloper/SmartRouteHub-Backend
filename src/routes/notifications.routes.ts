@@ -1,8 +1,9 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { NotificationService } from '../services/notification.service';
-import { authenticate, requireRole } from '../middleware/auth';
+import { authenticate } from '../middleware/auth';
 import { getRedisSubscriber } from '../config/redis';
 import { db } from '../config/database';
+import { JWTUser } from '../types';
 
 export async function notificationsRoutes(fastify: FastifyInstance) {
   const notificationService = new NotificationService();
@@ -11,7 +12,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/',
     {
-      preHandler: [authenticate, requireRole(['parent'])],
+      preHandler: [authenticate],
       schema: {
         description: 'Get notifications for logged-in parent',
         tags: ['Notifications'],
@@ -26,30 +27,30 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    async (request: FastifyRequest<{ Querystring: any }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        if (!request.user || request.user.role !== 'parent' || !request.user.organization_id) {
-          reply.code(403).send({ error: 'Access denied' });
-          return;
+        const user = request.user as JWTUser;
+        if (!user || user.role !== 'parent' || !user.organization_id) {
+          return reply.code(403).send({ error: 'Access denied' });
         }
 
         // Get parent user ID from database
         const parent = await db('users')
-          .where({ email: request.user.email, organization_id: request.user.organization_id })
+          .where({ email: user.email, organization_id: user.organization_id })
           .first();
 
         if (!parent) {
-          reply.code(404).send({ error: 'Parent not found' });
-          return;
+          return reply.code(404).send({ error: 'Parent not found' });
         }
 
+        const query = request.query as { unread_only?: boolean; limit?: number; offset?: number };
         const result = await notificationService.getParentNotifications(
           parent.id,
-          request.user.organization_id,
+          user.organization_id,
           {
-            unreadOnly: request.query.unread_only,
-            limit: request.query.limit,
-            offset: request.query.offset,
+            unreadOnly: query.unread_only,
+            limit: query.limit,
+            offset: query.offset,
           }
         );
 
@@ -64,7 +65,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/unread-count',
     {
-      preHandler: [authenticate, requireRole(['parent'])],
+      preHandler: [authenticate],
       schema: {
         description: 'Get unread notification count',
         tags: ['Notifications'],
@@ -73,13 +74,13 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        if (!request.user || request.user.role !== 'parent' || !request.user.organization_id) {
-          reply.code(403).send({ error: 'Access denied' });
-          return;
+        const user = request.user as JWTUser;
+        if (!user || user.role !== 'parent' || !user.organization_id) {
+          return reply.code(403).send({ error: 'Access denied' });
         }
 
-        const parent = await fastify.knex('users')
-          .where({ email: request.user.email, organization_id: request.user.organization_id })
+        const parent = await db('users')
+          .where({ email: user.email, organization_id: user.organization_id })
           .first();
 
         if (!parent) {
@@ -89,7 +90,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
 
         const count = await notificationService.getUnreadCount(
           parent.id,
-          request.user.organization_id
+          user.organization_id
         );
 
         reply.send({ unread_count: count });
@@ -103,22 +104,22 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
   fastify.patch(
     '/:id/read',
     {
-      preHandler: [authenticate, requireRole(['parent'])],
+      preHandler: [authenticate],
       schema: {
         description: 'Mark notification as read',
         tags: ['Notifications'],
         security: [{ bearerAuth: [] }],
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        if (!request.user || request.user.role !== 'parent' || !request.user.organization_id) {
-          reply.code(403).send({ error: 'Access denied' });
-          return;
+        const user = request.user as JWTUser;
+        if (!user || user.role !== 'parent' || !user.organization_id) {
+          return reply.code(403).send({ error: 'Access denied' });
         }
 
-        const parent = await fastify.knex('users')
-          .where({ email: request.user.email, organization_id: request.user.organization_id })
+        const parent = await db('users')
+          .where({ email: user.email, organization_id: user.organization_id })
           .first();
 
         if (!parent) {
@@ -126,7 +127,8 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
           return;
         }
 
-        await notificationService.markAsRead(request.params.id, parent.id);
+        const params = request.params as { id: string };
+        await notificationService.markAsRead(params.id, parent.id);
         reply.send({ message: 'Notification marked as read' });
       } catch (error: any) {
         reply.code(500).send({ error: error.message });
@@ -138,7 +140,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
   fastify.patch(
     '/read-all',
     {
-      preHandler: [authenticate, requireRole(['parent'])],
+      preHandler: [authenticate],
       schema: {
         description: 'Mark all notifications as read',
         tags: ['Notifications'],
@@ -147,13 +149,13 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        if (!request.user || request.user.role !== 'parent' || !request.user.organization_id) {
-          reply.code(403).send({ error: 'Access denied' });
-          return;
+        const user = request.user as JWTUser;
+        if (!user || user.role !== 'parent' || !user.organization_id) {
+          return reply.code(403).send({ error: 'Access denied' });
         }
 
-        const parent = await fastify.knex('users')
-          .where({ email: request.user.email, organization_id: request.user.organization_id })
+        const parent = await db('users')
+          .where({ email: user.email, organization_id: user.organization_id })
           .first();
 
         if (!parent) {
@@ -173,7 +175,7 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/stream',
     {
-      preHandler: [authenticate, requireRole(['parent'])],
+      preHandler: [authenticate],
       schema: {
         description: 'Real-time notification stream (Server-Sent Events)',
         tags: ['Notifications'],
@@ -182,13 +184,13 @@ export async function notificationsRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        if (!request.user || request.user.role !== 'parent' || !request.user.organization_id) {
-          reply.code(403).send({ error: 'Access denied' });
-          return;
+        const user = request.user as JWTUser;
+        if (!user || user.role !== 'parent' || !user.organization_id) {
+          return reply.code(403).send({ error: 'Access denied' });
         }
 
-        const parent = await fastify.knex('users')
-          .where({ email: request.user.email, organization_id: request.user.organization_id })
+        const parent = await db('users')
+          .where({ email: user.email, organization_id: user.organization_id })
           .first();
 
         if (!parent) {

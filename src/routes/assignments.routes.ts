@@ -1,7 +1,10 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { AssignmentService } from '../services/assignment.service';
-import { authenticate, requirePermission } from '../middleware/auth';
+import { authenticate } from '../middleware/auth';
+import { hasPermission } from '../rbac/hasPermission';
+import { PERMISSIONS } from '../rbac/permissions';
+import { JWTUser } from '../types';
 
 const assignStudentsToRouteSchema = z.object({
   student_ids: z.array(z.string().uuid()),
@@ -21,7 +24,7 @@ export async function assignmentsRoutes(fastify: FastifyInstance) {
   fastify.post(
     '/students-to-route',
     {
-      preHandler: [authenticate, requirePermission('route', 'update')],
+      preHandler: [authenticate],
       schema: {
         description: 'Assign students to a route',
         tags: ['Assignments'],
@@ -30,12 +33,17 @@ export async function assignmentsRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.ROUTE.UPDATE)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
         const data = assignStudentsToRouteSchema.parse(request.body);
         const result = await assignmentService.assignStudentsToRoute(
           data.student_ids,
           data.route_id,
           data.bus_id,
-          request.user!.organization_id
+          user.organization_id!
         );
         reply.send({
           message: 'Students assigned successfully',
@@ -55,7 +63,7 @@ export async function assignmentsRoutes(fastify: FastifyInstance) {
   fastify.post(
     '/students-to-bus',
     {
-      preHandler: [authenticate, requirePermission('bus', 'update')],
+      preHandler: [authenticate],
       schema: {
         description: 'Assign students to a bus',
         tags: ['Assignments'],
@@ -64,11 +72,16 @@ export async function assignmentsRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.BUS.UPDATE)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
         const data = assignStudentsToBusSchema.parse(request.body);
         const result = await assignmentService.assignStudentsToBus(
           data.student_ids,
           data.bus_id,
-          request.user!.organization_id
+          user.organization_id!
         );
         reply.send({
           message: 'Students assigned successfully',
@@ -87,18 +100,24 @@ export async function assignmentsRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/route/:id/students',
     {
-      preHandler: [authenticate, requirePermission('route', 'read')],
+      preHandler: [authenticate],
       schema: {
         description: 'Get all students assigned to a route',
         tags: ['Assignments'],
         security: [{ bearerAuth: [] }],
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.ROUTE.GET)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
+        const params = request.params as { id: string };
         const result = await assignmentService.getRouteAssignments(
-          request.params.id,
-          request.user!.organization_id
+          params.id,
+          user.organization_id!
         );
         reply.send(result);
       } catch (error: any) {
@@ -111,18 +130,24 @@ export async function assignmentsRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/bus/:id/students',
     {
-      preHandler: [authenticate, requirePermission('bus', 'read')],
+      preHandler: [authenticate],
       schema: {
         description: 'Get all students assigned to a bus',
         tags: ['Assignments'],
         security: [{ bearerAuth: [] }],
       },
     },
-    async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.BUS.GET)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
+        const params = request.params as { id: string };
         const result = await assignmentService.getBusAssignments(
-          request.params.id,
-          request.user!.organization_id
+          params.id,
+          user.organization_id!
         );
         reply.send(result);
       } catch (error: any) {
