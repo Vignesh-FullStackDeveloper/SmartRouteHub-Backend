@@ -62,6 +62,7 @@ const configSchema = z.object({
   
   // Development
   SWAGGER_DISABLE_AUTH: z.string().default('false'), // Set to 'true' to disable auth in Swagger UI (dev only)
+  AUTO_INIT_DB: z.string().default('true'), // Auto-create database and run migrations on startup
 });
 
 // Parse and validate environment variables
@@ -98,6 +99,7 @@ function getConfig() {
       REDIS_PASSWORD: process.env.REDIS_PASSWORD,
       REDIS_DB: process.env.REDIS_DB || '0',
       SWAGGER_DISABLE_AUTH: process.env.SWAGGER_DISABLE_AUTH || 'false',
+      AUTO_INIT_DB: process.env.AUTO_INIT_DB || 'true',
     };
 
     return configSchema.parse(rawConfig);
@@ -187,6 +189,7 @@ export const appConfig = {
   
   // Development
   swaggerDisableAuth: config.SWAGGER_DISABLE_AUTH === 'true',
+  autoInitDb: config.AUTO_INIT_DB === 'true',
 };
 
 export default appConfig;

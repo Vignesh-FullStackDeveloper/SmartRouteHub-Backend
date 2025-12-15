@@ -4,174 +4,205 @@ Production-grade backend API for School Bus Tracking System built with Fastify, 
 
 ## Features
 
+- ✅ **Auto Database Setup**: Database, migrations, and seeds run automatically on startup
+- ✅ **Multi-tenant**: Organization-based data isolation with separate databases
 - ✅ **Authentication & Authorization**: JWT-based auth with role-based permissions
-- ✅ **Multi-tenant**: Organization-based data isolation
-- ✅ **Enterprise Logging**: Winston with daily rotation and centralized logging
+- ✅ **Real-time Notifications**: Redis pub/sub for instant notifications
 - ✅ **API Documentation**: Swagger/OpenAPI with interactive UI
-- ✅ **Database Migrations**: Automatic schema management with Knex
-- ✅ **Error Handling**: Comprehensive error handling and logging
-- ✅ **Rate Limiting**: Protection against abuse
-- ✅ **Security**: Helmet, CORS, input validation
-- ✅ **Analytics**: Travel history and insights for students, buses, and drivers
+- ✅ **Enterprise Logging**: Winston with daily rotation
+- ✅ **Security**: Helmet, CORS, rate limiting, input validation
 
 ## Tech Stack
 
-- **Framework**: Fastify
-- **Database**: PostgreSQL
-- **ORM/Query Builder**: Knex.js
+- **Framework**: Fastify 4.x
+- **Database**: PostgreSQL 12+ with Knex.js
 - **Authentication**: JWT
-- **Logging**: Winston with daily rotation
+- **Cache/Pub-Sub**: Redis (ioredis)
 - **Validation**: Zod
-- **Documentation**: Swagger/OpenAPI
+- **Logging**: Winston
 
 ## Prerequisites
 
 - Node.js 18+
-- PostgreSQL 12+
-- npm or yarn
+- PostgreSQL 12+ (running)
+- Redis (optional, for notifications)
 
-## Installation
+## Quick Start
 
-1. **Install dependencies**:
+### 1. Install Dependencies
+
 ```bash
 npm install
 ```
 
-2. **Configure environment**:
+### 2. Configure Environment
+
 ```bash
-cp .env.example .env
-# Edit .env with your database credentials
+# Copy example file
+cp .env.local.example .env.local
+
+# Edit .env.local with your values
+# Required: DB_PASSWORD, JWT_SECRET (min 32 chars)
 ```
 
-3. **Run migrations**:
-```bash
-npm run migrate
-```
+### 3. Start Server
 
-4. **Seed permissions**:
-```bash
-npm run seed
-```
-
-5. **Start development server**:
 ```bash
 npm run dev
 ```
 
-## API Documentation
+**That's it!** The server automatically:
+- ✅ Creates database if it doesn't exist
+- ✅ Runs all migrations
+- ✅ Seeds initial data (superadmin user)
+- ✅ Starts API server on port 3000
 
-Once the server is running, access Swagger UI at:
-```
-http://localhost:3000/docs
-```
+### 4. Access API
+
+- **Swagger UI**: http://localhost:3000/docs
+- **Health Check**: http://localhost:3000/health
+
+## Environment Files
+
+| File | Purpose | When Used |
+|------|---------|-----------|
+| `.env.local` | Development config | `NODE_ENV=development` (default) |
+| `.env.production` | Production config | `NODE_ENV=production` |
+
+**Setup:**
+- Development: Copy `.env.local.example` → `.env.local`
+- Production: Copy `.env.production.example` → `.env.production`
+
+The application automatically selects the correct file based on `NODE_ENV`.
+
+## Authentication
+
+### Default Superadmin
+
+After first startup:
+- **Email**: `superadmin@smartroutehub.com`
+- **Password**: `SuperAdmin@123`
+- ⚠️ **Change password after first login!**
+
+### Login via Swagger
+
+1. Open http://localhost:3000/docs
+2. Click `POST /api/auth/login`
+3. Enter credentials and execute
+4. Copy the `token` from response
+5. Click "Authorize" → Enter: `Bearer <token>`
+
+## Database Management
+
+### Auto-Initialization (Default)
+
+With `AUTO_INIT_DB=true` (default), the server automatically:
+1. Creates main database if it doesn't exist
+2. Runs all pending migrations
+3. Runs seed files (creates superadmin)
+
+**No manual setup needed!**
+
+### Manual Commands
+
+You still need manual commands for:
+
+| Task | Command |
+|------|---------|
+| Create new migration | `npm run migrate:make <name>` |
+| Run new migrations | `npm run migrate` (or restart server) |
+| Rollback migration | `npm run migrate:rollback` |
+| Run new seeds | `npm run seed` (or restart server) |
+
+**Note**: Auto-init only runs on startup. For new migrations/seeds added after server started, either run manually or restart the server.
+
+### Database Architecture
+
+- **Main Database** (`smartroutehub`): Organizations, superadmin users
+- **Organization Databases** (`smartroutehub_{org_code}`): Auto-created per organization, complete data isolation
 
 ## API Endpoints
 
-### Authentication
-- `POST /api/auth/login` - User login
-- `GET /api/auth/verify` - Verify JWT token
-- `POST /api/auth/logout` - Logout
+**54+ endpoints** covering:
+- Authentication (login, verify, logout)
+- Organizations (create, get, update)
+- Students, Buses, Routes, Drivers
+- Trips & Location Tracking
+- Analytics & Insights
+- Assignments & Subscriptions
+- Notifications (real-time)
+- Permissions & Roles
 
-### Organizations
-- `POST /api/organizations` - Create organization
-- `GET /api/organizations/:id` - Get organization
-- `PUT /api/organizations/:id` - Update organization
+**Full API documentation**: http://localhost:3000/docs
 
-### Students
-- `POST /api/students` - Create student
-- `GET /api/students` - Get all students
-- `GET /api/students/:id` - Get student by ID
-- `PUT /api/students/:id` - Update student
-- `DELETE /api/students/:id` - Delete student
-- `GET /api/students/:id/pickup-location` - Get pickup location
+## Configuration
 
-### Buses
-- `POST /api/buses` - Create bus
-- `GET /api/buses` - Get all buses
-- `GET /api/buses/:id` - Get bus by ID
-- `PUT /api/buses/:id` - Update bus
-- `DELETE /api/buses/:id` - Delete bus
-- `POST /api/buses/:id/assign-driver` - Assign driver
+### Key Environment Variables
 
-### Routes
-- `POST /api/routes` - Create route with stops
-- `GET /api/routes` - Get all routes
-- `GET /api/routes/:id` - Get route with stops
-- `PUT /api/routes/:id` - Update route
-- `DELETE /api/routes/:id` - Delete route
-- `POST /api/routes/:id/assign-students` - Assign students to route
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NODE_ENV` | `development` | Environment mode |
+| `PORT` | `3000` | Server port |
+| `DB_HOST` | `localhost` | Database host |
+| `DB_PASSWORD` | - | Database password |
+| `JWT_SECRET` | - | **Required**: Min 32 characters |
+| `AUTO_INIT_DB` | `true` | Auto-create DB and run migrations |
+| `REDIS_HOST` | `127.0.0.1` | Redis host (optional) |
 
-### Drivers
-- `POST /api/drivers` - Create driver
-- `GET /api/drivers` - Get all drivers
-- `GET /api/drivers/:id` - Get driver by ID
-- `PUT /api/drivers/:id` - Update driver
-- `GET /api/drivers/:id/schedule` - Get driver schedule
+See `.env.local.example` for complete configuration options.
 
-### Trips
-- `POST /api/trips/start` - Start trip
-- `POST /api/trips/:id/location` - Update trip location
-- `POST /api/trips/:id/end` - End trip
-- `GET /api/trips/active` - Get active trips
-- `GET /api/trips/:id` - Get trip details
+## Scripts
 
-### Analytics
-- `GET /api/analytics/students/:id/travel-history` - Student travel history
-- `GET /api/analytics/buses/:id/travel-history` - Bus travel history
-- `GET /api/analytics/drivers/:id/travel-history` - Driver travel history
-- `GET /api/analytics/dashboard` - Dashboard insights
+```bash
+npm run dev          # Start dev server (auto-reload + auto-init)
+npm run build        # Build for production
+npm start            # Start production server
+npm run migrate      # Run migrations manually
+npm run migrate:make <name>  # Create new migration
+npm run migrate:rollback     # Rollback last migration
+npm run seed         # Run seeds manually
+npm run lint         # Run ESLint
+npm run format       # Format code
+```
 
-### Assignments
-- `POST /api/assignments/students-to-route` - Assign students to route
-- `POST /api/assignments/students-to-bus` - Assign students to bus
-- `GET /api/assignments/route/:id/students` - Get route assignments
-- `GET /api/assignments/bus/:id/students` - Get bus assignments
+## Architecture
 
-## Database Schema
+**Layered Architecture:**
+```
+Routes → Services → Repositories → Database
+```
 
-The database automatically creates the following tables:
-- `organizations` - Organization data
-- `users` - Users (admin, driver, parent)
-- `buses` - Bus information
-- `students` - Student information
-- `routes` - Bus routes
-- `stops` - Route stops
-- `trips` - Active/completed trips
-- `location_tracking` - GPS location history
-- `permissions` - Permission definitions
-- `role_permissions` - Role-permission mappings
+- **Routes**: HTTP request/response handling
+- **Services**: Business logic
+- **Repositories**: Database operations
+- **Multi-tenant**: Separate database per organization
 
-## Logging
+## Troubleshooting
 
-Logs are stored in the `logs/` directory with daily rotation:
-- `application-YYYY-MM-DD.log` - All application logs
-- `error-YYYY-MM-DD.log` - Error logs only
-- `access-YYYY-MM-DD.log` - Access logs
-- `exceptions-YYYY-MM-DD.log` - Unhandled exceptions
-- `rejections-YYYY-MM-DD.log` - Unhandled promise rejections
+### Database Connection Failed
+- Verify PostgreSQL is running
+- Check credentials in `.env.local`
+- Ensure PostgreSQL user has `CREATEDB` privilege: `ALTER USER postgres CREATEDB;`
 
-## Security Features
+### Auto-Init Not Working
+- Check `AUTO_INIT_DB=true` in `.env.local`
+- Check server logs for errors
+- Run manually: `npm run migrate && npm run seed`
 
-- JWT authentication
-- Role-based access control (RBAC)
-- Password hashing with bcrypt
-- Rate limiting
-- CORS protection
-- Helmet security headers
-- Input validation with Zod
-- SQL injection protection (parameterized queries)
+### Redis Connection Failed
+- Redis is optional (notifications won't work without it)
+- Check Redis is running: `redis-cli ping`
+- Verify configuration in `.env.local`
 
 ## Production Deployment
 
 1. Set `NODE_ENV=production`
-2. Use strong `JWT_SECRET`
+2. Use strong `JWT_SECRET` (32+ characters)
 3. Configure proper CORS origins
-4. Set up SSL/TLS
-5. Configure database connection pooling
-6. Set up log aggregation
-7. Enable monitoring and alerts
+4. Set `AUTO_INIT_DB=false` (run migrations manually)
+5. Set up SSL/TLS
+6. Configure monitoring and alerts
 
 ## License
 
 MIT
-

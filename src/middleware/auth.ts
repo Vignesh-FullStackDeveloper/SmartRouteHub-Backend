@@ -19,7 +19,6 @@ export async function authenticate(
   try {
     await request.jwtVerify();
     const user = request.user as JWTUser;
-    console.log('user ####', user);
     let permissions: string[] = [];
     
     if (user.role === 'superadmin') {

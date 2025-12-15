@@ -9,12 +9,15 @@ dist/
 build/
 *.tsbuildinfo
 
-# Environment variables
+# Environment variables (actual files with secrets)
 .env
 .env.local
 .env.production
 .env.staging
 .env.*.local
+
+# But keep example files (templates)
+!.env*.example
 
 # Logs
 logs/

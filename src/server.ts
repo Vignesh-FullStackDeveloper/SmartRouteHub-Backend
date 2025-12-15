@@ -10,6 +10,7 @@ import { testConnection, closeConnection, getDatabaseStats } from './config/data
 import { logger, loggerStream } from './config/logger';
 import { errorHandler } from './middleware/error-handler';
 import { requestProfiling, getProfilingStats, getMemoryProfile } from './middleware/profiling';
+import { DatabaseInitService } from './services/database-init.service';
 
 // Import routes
 import { authRoutes } from './routes/auth.routes';
@@ -230,6 +231,21 @@ Click the "Authorize" button above and enter: \`Bearer <your-token>\`
 
 async function start() {
   try {
+    // Initialize database (create if not exists, run migrations, seed)
+    if (appConfig.autoInitDb) {
+      logger.info('Initializing database (auto-create, migrations, seeds)...');
+      try {
+        const dbInitService = new DatabaseInitService();
+        await dbInitService.initialize();
+        logger.info('Database initialization completed');
+      } catch (error: any) {
+        logger.warn({
+          message: 'Database auto-initialization failed, continuing with connection test',
+          error: error.message,
+        });
+      }
+    }
+
     // Test database connection
     logger.info('Testing database connection...');
     const dbConnected = await testConnection();
