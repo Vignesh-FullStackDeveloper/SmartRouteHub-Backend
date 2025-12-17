@@ -70,11 +70,11 @@ export async function usersRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // Get all users (Organization Admin only)
+  // Get all users
   fastify.get(
     '/',
     {
-      preHandler: [authenticate, requireRole(['admin'])],
+      preHandler: [authenticate],
       schema: {
         description: 'View list of users',
         tags: ['Users'],
@@ -95,8 +95,29 @@ export async function usersRoutes(fastify: FastifyInstance) {
           return reply.code(400).send({ error: 'Organization ID is required' });
         }
         
-        const users = await userService.getAll(user.organization_id, request.query as any);
-        return reply.send(users);
+        // Check permissions in descending order of authority
+        if (hasPermission(user, PERMISSIONS.USER.GET_ALL) || user.role === 'admin') {
+          // Admin role: return full dataset
+          const users = await userService.getAll(user.organization_id, request.query as any);
+          return reply.send(users);
+        }
+        
+        if (hasPermission(user, PERMISSIONS.USER.GET)) {
+          // Restricted: return filtered dataset based on role
+          if (user.role === 'parent') {
+            // Parent: can only see their own user info
+            const userData = await userService.getById(user.id, user.organization_id);
+            return reply.send([userData]);
+          } else if (user.role === 'driver') {
+            // Driver: can only see their own user info
+            const userData = await userService.getById(user.id, user.organization_id);
+            return reply.send([userData]);
+          }
+          // For other roles with GET permission, return empty or limited data
+          return reply.send([]);
+        }
+        
+        return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
       } catch (error: any) {
         reply.code(500).send({ error: error.message });
       }

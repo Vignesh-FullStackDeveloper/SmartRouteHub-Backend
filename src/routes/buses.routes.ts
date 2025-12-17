@@ -1,10 +1,13 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { BusService } from '../services/bus.service';
+import { StudentService } from '../services/student.service';
 import { authenticate } from '../middleware/auth';
 import { hasPermission } from '../rbac/hasPermission';
 import { PERMISSIONS } from '../rbac/permissions';
 import { JWTUser } from '../types';
+import { sendSuccess, sendError, parsePagination, getPaginationMeta } from '../utils/response.util';
+import { logger } from '../config/logger';
 
 const createBusSchema = z.object({
   bus_number: z.string().min(1),
@@ -19,6 +22,7 @@ const updateBusSchema = createBusSchema.partial();
 
 export async function busesRoutes(fastify: FastifyInstance) {
   const busService = new BusService();
+  const studentService = new StudentService();
 
   // Create bus
   fastify.post(
@@ -91,59 +95,159 @@ export async function busesRoutes(fastify: FastifyInstance) {
         querystring: {
           type: 'object',
           properties: {
-            is_active: { type: 'boolean' },
-            driver_id: { type: 'string' },
+            bus_id: { type: 'string', format: 'uuid', description: 'Filter by bus ID' },
+            student_id: { type: 'string', format: 'uuid', description: 'Filter by student ID (hierarchy: student -> bus)' },
+            route_id: { type: 'string', format: 'uuid', description: 'Filter by route ID' },
+            driver_id: { type: 'string', format: 'uuid', description: 'Filter by driver ID' },
+            is_active: { type: 'boolean', description: 'Filter by active status' },
+            limit: { type: 'number', minimum: 1, description: 'Number of records to return (optional)' },
+            offset: { type: 'number', minimum: 0, description: 'Number of records to skip (optional)' },
           },
         },
         response: {
           200: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                id: { type: 'string' },
-                organization_id: { type: 'string' },
-                bus_number: { type: 'string' },
-                capacity: { type: 'integer' },
-                driver_id: { type: 'string' },
-                assigned_route_id: { type: 'string' },
-                is_active: { type: 'boolean' },
-                metadata: { type: 'object' },
-                created_at: { type: 'string', format: 'date-time' },
-                updated_at: { type: 'string', format: 'date-time' },
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              data: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    organization_id: { type: 'string' },
+                    bus_number: { type: 'string' },
+                    capacity: { type: 'integer' },
+                    driver_id: { type: 'string' },
+                    assigned_route_id: { type: 'string' },
+                    is_active: { type: 'boolean' },
+                    metadata: { type: 'object' },
+                    created_at: { type: 'string', format: 'date-time' },
+                    updated_at: { type: 'string', format: 'date-time' },
+                  },
+                },
               },
+              pagination: {
+                type: 'object',
+                nullable: true,
+                properties: {
+                  total: { type: 'number' },
+                  limit: { type: 'number' },
+                  offset: { type: 'number' },
+                  hasMore: { type: 'boolean' },
+                },
+              },
+              message: { type: 'string', nullable: true },
             },
           },
-          403: { type: 'object', properties: { error: { type: 'string' } } },
-          500: { type: 'object', properties: { error: { type: 'string' } } },
+          400: { type: 'object', properties: { success: { type: 'boolean' }, error: { type: 'string' }, details: { type: 'object' } } },
+          403: { type: 'object', properties: { success: { type: 'boolean' }, error: { type: 'string' } } },
+          500: { type: 'object', properties: { success: { type: 'boolean' }, error: { type: 'string' } } },
         },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const user = request.user as JWTUser;
+        const query = request.query as any;
+        
+        // Parse pagination
+        let pagination;
+        try {
+          pagination = parsePagination(query);
+        } catch (error: any) {
+          logger.warn({ message: 'Invalid pagination parameters', error: error.message, userId: user.id });
+          return sendError(reply, 400, error.message);
+        }
+
+        // Build basic filters
+        const basicFilters: any = {
+          ...pagination,
+        };
+        if (query.bus_id) basicFilters.bus_id = query.bus_id;
+        if (query.is_active !== undefined) basicFilters.is_active = query.is_active === 'true' || query.is_active === true;
+
         // Check permissions in descending order of authority
-        if (hasPermission(user, PERMISSIONS.BUS.GET_ALL)) {
-          // Highest level: return full dataset
-          const buses = await busService.getAll(user.organization_id!, request.query as any);
-          return reply.send(buses);
+        if (hasPermission(user, PERMISSIONS.BUS.GET_ALL) || user.role === 'admin') {
+          // Admin role: use micro functions based on query params
+          let result;
+          
+          if (query.student_id) {
+            // Use micro function: getByStudentId
+            result = await busService.getByStudentId(query.student_id, user.organization_id!);
+          } else if (query.route_id) {
+            // Use micro function: getByRouteId
+            result = await busService.getByRouteId(query.route_id, user.organization_id!, pagination);
+          } else if (query.driver_id) {
+            // Use micro function: getByDriverId
+            result = await busService.getByDriverId(query.driver_id, user.organization_id!, pagination);
+          } else {
+            // Use basic getAll
+            result = await busService.getAll(user.organization_id!, basicFilters);
+          }
+          
+          const paginationMeta = getPaginationMeta(result.total, pagination.limit, pagination.offset);
+          logger.info({ 
+            message: 'Buses retrieved', 
+            userId: user.id, 
+            role: user.role, 
+            count: result.data.length,
+            total: result.total 
+          });
+          return sendSuccess(reply, result.data, 'Buses retrieved successfully', paginationMeta);
         }
         
         if (hasPermission(user, PERMISSIONS.BUS.GET)) {
-          // Restricted: return filtered dataset
+          // Restricted: return filtered dataset based on role
           if (user.role === 'driver') {
-            // Drivers can only see their own bus
-            const buses = await busService.getByDriverId(user.id, user.organization_id!);
-            return reply.send(buses);
+            // Drivers can only see their own bus - use micro function
+            const result = await busService.getByDriverId(user.id, user.organization_id!, pagination);
+            const paginationMeta = getPaginationMeta(result.total, pagination.limit, pagination.offset);
+            logger.info({ 
+              message: 'Buses retrieved for driver', 
+              userId: user.id, 
+              count: result.data.length 
+            });
+            return sendSuccess(reply, result.data, 'Buses retrieved successfully', paginationMeta);
+          } else if (user.role === 'parent') {
+            // Parent: buses assigned to their children
+            // Step 1: Get students for parent
+            const studentsResult = await studentService.getByParentId(user.id, user.organization_id!);
+            
+            if (studentsResult.data.length === 0) {
+              logger.info({ message: 'No students found for parent', userId: user.id });
+              return sendSuccess(reply, [], 'No buses found', getPaginationMeta(0, pagination.limit, pagination.offset));
+            }
+            
+            // Step 2: Get buses for these students - use micro function
+            const studentIds = studentsResult.data.map(s => s.id);
+            const result = await busService.getBusesByStudentIds(studentIds, user.organization_id!, pagination);
+            const paginationMeta = getPaginationMeta(result.total, pagination.limit, pagination.offset);
+            
+            logger.info({ 
+              message: 'Buses retrieved for parent', 
+              userId: user.id, 
+              count: result.data.length,
+              total: result.total 
+            });
+            return sendSuccess(reply, result.data, 'Buses retrieved successfully', paginationMeta);
           }
           // For other roles with GET permission, return all buses (read-only access)
-          const buses = await busService.getAll(user.organization_id!, request.query as any);
-          return reply.send(buses);
+          const result = await busService.getAll(user.organization_id!, basicFilters);
+          const paginationMeta = getPaginationMeta(result.total, pagination.limit, pagination.offset);
+          return sendSuccess(reply, result.data, 'Buses retrieved successfully', paginationMeta);
         }
         
-        return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        logger.warn({ message: 'Insufficient permissions to get buses', userId: user.id, role: user.role });
+        return sendError(reply, 403, 'Forbidden: Insufficient permissions');
       } catch (error: any) {
-        reply.code(500).send({ error: error.message });
+        logger.error({ 
+          message: 'Error retrieving buses', 
+          error: error.message, 
+          stack: error.stack,
+          userId: (request.user as JWTUser)?.id 
+        });
+        return sendError(reply, 500, 'Internal server error', error.message);
       }
     }
   );
@@ -204,6 +308,19 @@ export async function busesRoutes(fastify: FastifyInstance) {
             if (!bus) {
               return reply.code(403).send({ error: 'Forbidden: Can only access own bus' });
             }
+            return reply.send(bus);
+          } else if (user.role === 'parent') {
+            // Parent: can only get buses assigned to their children
+            const students = await studentService.getByParentId(user.id, user.organization_id!);
+            const busIds = students
+              .filter(s => s.assigned_bus_id)
+              .map(s => s.assigned_bus_id);
+            
+            if (!busIds.includes(params.id)) {
+              return reply.code(403).send({ error: 'Forbidden: Can only access buses for your children' });
+            }
+            
+            const bus = await busService.getById(params.id, user.organization_id!);
             return reply.send(bus);
           }
           // For other roles with GET permission, allow access

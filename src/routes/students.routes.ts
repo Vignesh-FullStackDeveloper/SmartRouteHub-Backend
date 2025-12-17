@@ -1,10 +1,13 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { StudentService } from '../services/student.service';
+import { BusService } from '../services/bus.service';
 import { authenticate } from '../middleware/auth';
 import { hasPermission } from '../rbac/hasPermission';
 import { PERMISSIONS } from '../rbac/permissions';
 import { JWTUser } from '../types';
+import { sendSuccess, sendError, parsePagination, getPaginationMeta } from '../utils/response.util';
+import { logger } from '../config/logger';
 
 const createStudentSchema = z.object({
   name: z.string().min(1),
@@ -22,6 +25,7 @@ const updateStudentSchema = createStudentSchema.partial();
 
 export async function studentsRoutes(fastify: FastifyInstance) {
   const studentService = new StudentService();
+  const busService = new BusService();
 
   // Create student
   fastify.post(
@@ -107,62 +111,179 @@ export async function studentsRoutes(fastify: FastifyInstance) {
         querystring: {
           type: 'object',
           properties: {
-            bus_id: { type: 'string' },
-            route_id: { type: 'string' },
-            class_grade: { type: 'string' },
-            is_active: { type: 'boolean' },
+            student_id: { type: 'string', format: 'uuid', description: 'Filter by student ID' },
+            parent_id: { type: 'string', format: 'uuid', description: 'Filter by parent ID' },
+            bus_id: { type: 'string', format: 'uuid', description: 'Filter by bus ID' },
+            route_id: { type: 'string', format: 'uuid', description: 'Filter by route ID' },
+            class_grade: { type: 'string', description: 'Filter by class grade' },
+            is_active: { type: 'boolean', description: 'Filter by active status' },
+            limit: { type: 'number', minimum: 1, description: 'Number of records to return (optional)' },
+            offset: { type: 'number', minimum: 0, description: 'Number of records to skip (optional)' },
           },
         },
         response: {
           200: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                id: { type: 'string' },
-                organization_id: { type: 'string' },
-                name: { type: 'string' },
-                class_grade: { type: 'string' },
-                section: { type: 'string' },
-                parent_id: { type: 'string' },
-                parent_contact: { type: 'string' },
-                pickup_point_id: { type: 'string' },
-                assigned_bus_id: { type: 'string' },
-                assigned_route_id: { type: 'string' },
-                is_active: { type: 'boolean' },
-                created_at: { type: 'string', format: 'date-time' },
-                updated_at: { type: 'string', format: 'date-time' },
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              data: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    organization_id: { type: 'string' },
+                    name: { type: 'string' },
+                    class_grade: { type: 'string' },
+                    section: { type: 'string' },
+                    parent_id: { type: 'string' },
+                    parent_contact: { type: 'string' },
+                    pickup_point_id: { type: 'string' },
+                    assigned_bus_id: { type: 'string' },
+                    assigned_route_id: { type: 'string' },
+                    is_active: { type: 'boolean' },
+                    created_at: { type: 'string', format: 'date-time' },
+                    updated_at: { type: 'string', format: 'date-time' },
+                  },
+                },
               },
+              pagination: {
+                type: 'object',
+                nullable: true,
+                properties: {
+                  total: { type: 'number' },
+                  limit: { type: 'number' },
+                  offset: { type: 'number' },
+                  hasMore: { type: 'boolean' },
+                },
+              },
+              message: { type: 'string', nullable: true },
             },
           },
-          403: { type: 'object', properties: { error: { type: 'string' } } },
-          500: { type: 'object', properties: { error: { type: 'string' } } },
+          400: { type: 'object', properties: { success: { type: 'boolean' }, error: { type: 'string' }, details: { type: 'object' } } },
+          403: { type: 'object', properties: { success: { type: 'boolean' }, error: { type: 'string' } } },
+          500: { type: 'object', properties: { success: { type: 'boolean' }, error: { type: 'string' } } },
         },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const user = request.user as JWTUser;
+        const query = request.query as any;
+        
+        // Parse pagination
+        let pagination;
+        try {
+          pagination = parsePagination(query);
+        } catch (error: any) {
+          logger.warn({ message: 'Invalid pagination parameters', error: error.message, userId: user.id });
+          return sendError(reply, 400, error.message);
+        }
+
+        // Build basic filters
+        const basicFilters: any = {
+          ...pagination,
+        };
+        if (query.student_id) basicFilters.student_id = query.student_id;
+        if (query.class_grade) basicFilters.class_grade = query.class_grade;
+        if (query.is_active !== undefined) basicFilters.is_active = query.is_active === 'true' || query.is_active === true;
+
         // Check permissions in descending order of authority
-        if (hasPermission(user, PERMISSIONS.STUDENT.GET_ALL)) {
-          // Highest level: return full dataset
-          const students = await studentService.getAll(user.organization_id!, request.query as any);
-          return reply.send(students);
+        if (hasPermission(user, PERMISSIONS.STUDENT.GET_ALL) || user.role === 'admin') {
+          // Admin role: use micro functions based on query params
+          let result;
+          
+          if (query.parent_id) {
+            // Use micro function: getByParentId
+            result = await studentService.getByParentId(query.parent_id, user.organization_id!, pagination);
+          } else if (query.route_id) {
+            // Use micro function: getByRouteId
+            result = await studentService.getByRouteId(query.route_id, user.organization_id!, pagination);
+          } else if (query.bus_id) {
+            // Use micro function: getByBusId (uses routes internally)
+            result = await studentService.getByBusId(query.bus_id, user.organization_id!, pagination);
+          } else {
+            // Use basic getAll
+            result = await studentService.getAll(user.organization_id!, basicFilters);
+          }
+          
+          const paginationMeta = getPaginationMeta(result.total, pagination.limit, pagination.offset);
+          logger.info({ 
+            message: 'Students retrieved', 
+            userId: user.id, 
+            role: user.role, 
+            count: result.data.length,
+            total: result.total 
+          });
+          return sendSuccess(reply, result.data, 'Students retrieved successfully', paginationMeta);
         }
         
         if (hasPermission(user, PERMISSIONS.STUDENT.GET)) {
-          // Restricted: return filtered dataset (e.g., only own children for parents)
+          // Restricted: return filtered dataset based on role
           if (user.role === 'parent') {
-            const students = await studentService.getByParentId(user.id, user.organization_id!);
-            return reply.send(students);
+            // Parent: only their own children - use micro function
+            const result = await studentService.getByParentId(user.id, user.organization_id!, pagination);
+            const paginationMeta = getPaginationMeta(result.total, pagination.limit, pagination.offset);
+            logger.info({ 
+              message: 'Students retrieved for parent', 
+              userId: user.id, 
+              count: result.data.length 
+            });
+            return sendSuccess(reply, result.data, 'Students retrieved successfully', paginationMeta);
+          } else if (user.role === 'driver') {
+            // Driver: students assigned to their bus/route
+            // Step 1: Get buses for driver
+            const busesResult = await busService.getByDriverId(user.id, user.organization_id!);
+            
+            if (busesResult.data.length === 0) {
+              logger.info({ message: 'No buses assigned to driver', userId: user.id });
+              return sendSuccess(reply, [], 'No students found', getPaginationMeta(0, pagination.limit, pagination.offset));
+            }
+            
+            // Step 2: Get students from all buses (uses routes internally)
+            const allStudents: any[] = [];
+            for (const bus of busesResult.data) {
+              const busStudentsResult = await studentService.getByBusId(bus.id, user.organization_id!);
+              allStudents.push(...busStudentsResult.data);
+            }
+            
+            // Remove duplicates
+            const uniqueStudents = Array.from(
+              new Map(allStudents.map(s => [s.id, s])).values()
+            );
+
+            // Apply pagination manually
+            let paginatedStudents = uniqueStudents;
+            let total = uniqueStudents.length;
+            if (pagination.offset !== undefined || pagination.limit !== undefined) {
+              const start = pagination.offset || 0;
+              const end = pagination.limit ? start + pagination.limit : undefined;
+              paginatedStudents = uniqueStudents.slice(start, end);
+            }
+            const paginationMeta = getPaginationMeta(total, pagination.limit, pagination.offset);
+            
+            logger.info({ 
+              message: 'Students retrieved for driver', 
+              userId: user.id, 
+              count: paginatedStudents.length,
+              total 
+            });
+            return sendSuccess(reply, paginatedStudents, 'Students retrieved successfully', paginationMeta);
           }
-          // For other roles with GET permission, return empty or limited data
-          return reply.send([]);
+          // For other roles with GET permission, return empty
+          return sendSuccess(reply, [], 'No students found', getPaginationMeta(0, pagination.limit, pagination.offset));
         }
         
-        return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        logger.warn({ message: 'Insufficient permissions to get students', userId: user.id, role: user.role });
+        return sendError(reply, 403, 'Forbidden: Insufficient permissions');
       } catch (error: any) {
-        reply.code(500).send({ error: error.message });
+        logger.error({ 
+          message: 'Error retrieving students', 
+          error: error.message, 
+          stack: error.stack,
+          userId: (request.user as JWTUser)?.id 
+        });
+        return sendError(reply, 500, 'Internal server error', error.message);
       }
     }
   );
@@ -219,12 +340,30 @@ export async function studentsRoutes(fastify: FastifyInstance) {
         }
         
         if (hasPermission(user, PERMISSIONS.STUDENT.GET)) {
-          // Restricted: can only get own children (for parents)
+          // Restricted: can only get students related to the user
           if (user.role === 'parent') {
             const students = await studentService.getByParentId(user.id, user.organization_id!);
             const student = students.find(s => s.id === params.id);
             if (!student) {
               return reply.code(403).send({ error: 'Forbidden: Can only access own children' });
+            }
+            return reply.send(student);
+          } else if (user.role === 'driver') {
+            // Driver: can only get students assigned to their bus
+            const buses = await busService.getByDriverId(user.id, user.organization_id!);
+            if (buses.length === 0) {
+              return reply.code(403).send({ error: 'Forbidden: No bus assigned' });
+            }
+            
+            const allStudents: any[] = [];
+            for (const bus of buses) {
+              const busStudents = await studentService.getByBusId(bus.id, user.organization_id!);
+              allStudents.push(...busStudents);
+            }
+            
+            const student = allStudents.find(s => s.id === params.id);
+            if (!student) {
+              return reply.code(403).send({ error: 'Forbidden: Can only access students in assigned bus' });
             }
             return reply.send(student);
           }

@@ -77,18 +77,42 @@ export class DriverService {
     }
   }
 
+  /**
+   * Get all drivers with basic filtering and pagination
+   * For hierarchy filtering, use specific methods: getByBusId, getByStudentId, getByRouteId
+   */
   async getAll(organizationId: string, filters?: {
+    driver_id?: string;
     is_active?: boolean;
     has_bus?: boolean;
-  }): Promise<any[]> {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: any[]; total: number }> {
     const organization = await this.organizationService.getById(organizationId);
     const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
     
     try {
       let query = orgDb('users').where({ role: 'driver' });
 
+      // Direct filtering only
+      if (filters?.driver_id) {
+        query = query.where({ 'users.id': filters.driver_id });
+      }
       if (filters?.is_active !== undefined) {
         query = query.where({ is_active: filters.is_active });
+      }
+
+      // Get total count before pagination
+      const countQuery = query.clone().clearSelect().clearOrder().count('* as total').first();
+      const countResult = await countQuery;
+      const total = parseInt(countResult?.total as string) || 0;
+
+      // Apply pagination if provided
+      if (filters?.offset !== undefined) {
+        query = query.offset(filters.offset);
+      }
+      if (filters?.limit !== undefined) {
+        query = query.limit(filters.limit);
       }
 
       const drivers = await query;
@@ -107,12 +131,150 @@ export class DriverService {
           })
         );
 
-        return driversWithBus.filter((d) =>
+        const filtered = driversWithBus.filter((d) =>
           filters.has_bus ? d.has_bus : !d.has_bus
         );
+        return { data: filtered, total: filtered.length };
       }
 
-      return driversWithOrg;
+      return { data: driversWithOrg, total };
+    } finally {
+      await orgDb.destroy();
+    }
+  }
+
+  /**
+   * Get driver by bus ID - Micro function
+   * Uses hierarchy: bus -> driver
+   */
+  async getByBusId(busId: string, organizationId: string): Promise<{ data: any[]; total: number }> {
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+    
+    try {
+      // Get bus's driver ID
+      const bus = await orgDb('buses')
+        .where({ id: busId })
+        .select('driver_id')
+        .first();
+      
+      if (!bus?.driver_id) {
+        return { data: [], total: 0 };
+      }
+
+      // Get driver
+      const driver = await orgDb('users')
+        .where({ id: bus.driver_id, role: 'driver' })
+        .first();
+      
+      if (!driver) {
+        return { data: [], total: 0 };
+      }
+
+      const driverWithOrg = {
+        ...driver,
+        organization_id: organizationId,
+      };
+
+      return { data: [driverWithOrg], total: 1 };
+    } finally {
+      await orgDb.destroy();
+    }
+  }
+
+  /**
+   * Get driver by student ID - Micro function
+   * Uses hierarchy: student -> bus -> driver
+   */
+  async getByStudentId(studentId: string, organizationId: string): Promise<{ data: any[]; total: number }> {
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+    
+    try {
+      // Step 1: Get student's bus ID
+      const student = await orgDb('students')
+        .where({ id: studentId })
+        .select('assigned_bus_id')
+        .first();
+      
+      if (!student?.assigned_bus_id) {
+        return { data: [], total: 0 };
+      }
+
+      // Step 2: Get bus's driver ID
+      const bus = await orgDb('buses')
+        .where({ id: student.assigned_bus_id })
+        .select('driver_id')
+        .first();
+      
+      if (!bus?.driver_id) {
+        return { data: [], total: 0 };
+      }
+
+      // Step 3: Get driver
+      const driver = await orgDb('users')
+        .where({ id: bus.driver_id, role: 'driver' })
+        .first();
+      
+      if (!driver) {
+        return { data: [], total: 0 };
+      }
+
+      const driverWithOrg = {
+        ...driver,
+        organization_id: organizationId,
+      };
+
+      return { data: [driverWithOrg], total: 1 };
+    } finally {
+      await orgDb.destroy();
+    }
+  }
+
+  /**
+   * Get driver by route ID - Micro function
+   * Uses hierarchy: route -> bus -> driver
+   */
+  async getByRouteId(routeId: string, organizationId: string): Promise<{ data: any[]; total: number }> {
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+    
+    try {
+      // Step 1: Get route's bus ID
+      const route = await orgDb('routes')
+        .where({ id: routeId })
+        .select('assigned_bus_id')
+        .first();
+      
+      if (!route?.assigned_bus_id) {
+        return { data: [], total: 0 };
+      }
+
+      // Step 2: Get bus's driver ID
+      const bus = await orgDb('buses')
+        .where({ id: route.assigned_bus_id })
+        .select('driver_id')
+        .first();
+      
+      if (!bus?.driver_id) {
+        return { data: [], total: 0 };
+      }
+
+      // Step 3: Get driver
+      const driver = await orgDb('users')
+        .where({ id: bus.driver_id, role: 'driver' })
+        .first();
+      
+      if (!driver) {
+        return { data: [], total: 0 };
+      }
+
+      const driverWithOrg = {
+        ...driver,
+        organization_id: organizationId,
+      };
+
+      return { data: [driverWithOrg], total: 1 };
     } finally {
       await orgDb.destroy();
     }

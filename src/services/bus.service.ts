@@ -69,52 +69,81 @@ export class BusService {
     }
   }
 
+  /**
+   * Get all buses with basic filtering and pagination
+   * For hierarchy filtering, use specific methods: getByDriverId, getByRouteId, getByStudentId
+   */
   async getAll(organizationId: string, filters?: {
+    bus_id?: string;
     is_active?: boolean;
-    driver_id?: string;
-  }): Promise<any[]> {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: any[]; total: number }> {
     const organization = await this.organizationService.getById(organizationId);
     const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
     
     try {
       let query = orgDb('buses').select('*');
 
+      // Direct filtering only
+      if (filters?.bus_id) {
+        query = query.where({ 'buses.id': filters.bus_id });
+      }
       if (filters?.is_active !== undefined) {
         query = query.where({ is_active: filters.is_active });
       }
-      if (filters?.driver_id) {
-        query = query.where({ driver_id: filters.driver_id });
+
+      // Get total count before pagination
+      const countQuery = query.clone().clearSelect().clearOrder().count('* as total').first();
+      const countResult = await countQuery;
+      const total = parseInt(countResult?.total as string) || 0;
+
+      // Apply pagination if provided
+      if (filters?.offset !== undefined) {
+        query = query.offset(filters.offset);
+      }
+      if (filters?.limit !== undefined) {
+        query = query.limit(filters.limit);
       }
 
       const buses = await query;
       
       // Enrich with driver and route information
-      const busesWithDetails = await Promise.all(
-        buses.map(async (bus) => {
-          const busWithDetails = await orgDb('buses')
-            .where({ 'buses.id': bus.id })
-            .leftJoin('users', 'buses.driver_id', 'users.id')
-            .leftJoin('routes', 'buses.assigned_route_id', 'routes.id')
-            .select(
-              'buses.*',
-              'users.name as driver_name',
-              'users.email as driver_email',
-              'routes.name as route_name'
-            )
-            .first();
-          
-          return {
-            ...busWithDetails,
-            organization_id: organizationId,
-            metadata: busWithDetails.metadata ? (typeof busWithDetails.metadata === 'string' ? JSON.parse(busWithDetails.metadata) : busWithDetails.metadata) : null,
-          };
-        })
-      );
+      const busesWithDetails = await this.enrichBusesWithDetails(buses, organizationId, orgDb);
 
-      return busesWithDetails;
+      return { data: busesWithDetails, total };
     } finally {
       await orgDb.destroy();
     }
+  }
+
+  /**
+   * Enrich buses with driver and route details - Micro function
+   */
+  private async enrichBusesWithDetails(buses: any[], organizationId: string, orgDb: any): Promise<any[]> {
+    return Promise.all(
+      buses.map(async (bus) => {
+        const busWithDetails = await orgDb('buses')
+          .where({ 'buses.id': bus.id })
+          .leftJoin('users', 'buses.driver_id', 'users.id')
+          .leftJoin('routes', 'buses.assigned_route_id', 'routes.id')
+          .select(
+            'buses.*',
+            'users.name as driver_name',
+            'users.email as driver_email',
+            'users.id as driver_user_id',
+            'routes.name as route_name',
+            'routes.id as route_id'
+          )
+          .first();
+        
+        return {
+          ...busWithDetails,
+          organization_id: organizationId,
+          metadata: busWithDetails.metadata ? (typeof busWithDetails.metadata === 'string' ? JSON.parse(busWithDetails.metadata) : busWithDetails.metadata) : null,
+        };
+      })
+    );
   }
 
   async getById(id: string, organizationId: string): Promise<any> {
@@ -148,36 +177,119 @@ export class BusService {
     }
   }
 
-  async getByDriverId(driverId: string, organizationId: string): Promise<any[]> {
+  /**
+   * Get buses by driver ID - Micro function
+   */
+  async getByDriverId(driverId: string, organizationId: string, pagination?: {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: any[]; total: number }> {
     const organization = await this.organizationService.getById(organizationId);
     const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
     
     try {
-      const bus = await orgDb('buses')
-        .where({ driver_id: driverId })
+      let query = orgDb('buses').where({ driver_id: driverId });
+
+      // Get total count
+      const countResult = await query.clone().count('* as total').first();
+      const total = parseInt(countResult?.total as string) || 0;
+
+      // Apply pagination if provided
+      if (pagination?.offset !== undefined) {
+        query = query.offset(pagination.offset);
+      }
+      if (pagination?.limit !== undefined) {
+        query = query.limit(pagination.limit);
+      }
+
+      const buses = await query;
+      const busesWithDetails = await this.enrichBusesWithDetails(buses, organizationId, orgDb);
+      
+      return { data: busesWithDetails, total };
+    } finally {
+      await orgDb.destroy();
+    }
+  }
+
+  /**
+   * Get bus by student ID - Micro function
+   * Uses hierarchy: student -> bus (direct assignment)
+   */
+  async getByStudentId(studentId: string, organizationId: string): Promise<{ data: any[]; total: number }> {
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+    
+    try {
+      // Get student's bus ID
+      const student = await orgDb('students')
+        .where({ id: studentId })
+        .select('assigned_bus_id')
         .first();
       
-      if (!bus) {
-        return [];
+      if (!student?.assigned_bus_id) {
+        return { data: [], total: 0 };
       }
-      
-      const busWithDetails = await orgDb('buses')
-        .where({ 'buses.id': bus.id })
+
+      // Get bus with details
+      const bus = await orgDb('buses')
+        .where({ 'buses.id': student.assigned_bus_id })
         .leftJoin('users', 'buses.driver_id', 'users.id')
         .leftJoin('routes', 'buses.assigned_route_id', 'routes.id')
         .select(
           'buses.*',
           'users.name as driver_name',
           'users.email as driver_email',
-          'routes.name as route_name'
+          'users.id as driver_user_id',
+          'routes.name as route_name',
+          'routes.id as route_id'
         )
         .first();
       
-      return [{
-        ...busWithDetails,
+      if (!bus) {
+        return { data: [], total: 0 };
+      }
+
+      const busWithDetails = {
+        ...bus,
         organization_id: organizationId,
-        metadata: busWithDetails.metadata ? (typeof busWithDetails.metadata === 'string' ? JSON.parse(busWithDetails.metadata) : busWithDetails.metadata) : null,
-      }];
+        metadata: bus.metadata ? (typeof bus.metadata === 'string' ? JSON.parse(bus.metadata) : bus.metadata) : null,
+      };
+
+      return { data: [busWithDetails], total: 1 };
+    } finally {
+      await orgDb.destroy();
+    }
+  }
+
+  /**
+   * Get buses by route ID - Micro function
+   */
+  async getByRouteId(routeId: string, organizationId: string, pagination?: {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: any[]; total: number }> {
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+    
+    try {
+      let query = orgDb('buses').where({ assigned_route_id: routeId });
+
+      // Get total count
+      const countResult = await query.clone().count('* as total').first();
+      const total = parseInt(countResult?.total as string) || 0;
+
+      // Apply pagination if provided
+      if (pagination?.offset !== undefined) {
+        query = query.offset(pagination.offset);
+      }
+      if (pagination?.limit !== undefined) {
+        query = query.limit(pagination.limit);
+      }
+
+      const buses = await query;
+      const busesWithDetails = await this.enrichBusesWithDetails(buses, organizationId, orgDb);
+      
+      return { data: busesWithDetails, total };
     } finally {
       await orgDb.destroy();
     }
@@ -292,6 +404,71 @@ export class BusService {
         organization_id: organizationId,
         metadata: updated.metadata ? (typeof updated.metadata === 'string' ? JSON.parse(updated.metadata) : updated.metadata) : null,
       } as Bus;
+    } finally {
+      await orgDb.destroy();
+    }
+  }
+
+  /**
+   * Get buses by multiple student IDs - Micro function
+   * Returns unique buses assigned to the given students
+   */
+  async getBusesByStudentIds(studentIds: string[], organizationId: string, pagination?: {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: any[]; total: number }> {
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+    
+    try {
+      // Get unique bus IDs from students
+      const students = await orgDb('students')
+        .whereIn('id', studentIds)
+        .whereNotNull('assigned_bus_id')
+        .select('assigned_bus_id')
+        .distinct();
+      
+      const busIds = students.map(s => s.assigned_bus_id).filter(Boolean);
+      
+      if (busIds.length === 0) {
+        return { data: [], total: 0 };
+      }
+
+      // Get buses with details
+      let query = orgDb('buses')
+        .whereIn('buses.id', busIds)
+        .leftJoin('users', 'buses.driver_id', 'users.id')
+        .leftJoin('routes', 'buses.assigned_route_id', 'routes.id')
+        .select(
+          'buses.*',
+          'users.name as driver_name',
+          'users.email as driver_email',
+          'users.id as driver_user_id',
+          'routes.name as route_name',
+          'routes.id as route_id'
+        );
+
+      // Get total count
+      const countResult = await query.clone().count('* as total').first();
+      const total = parseInt(countResult?.total as string) || 0;
+
+      // Apply pagination if provided
+      if (pagination?.offset !== undefined) {
+        query = query.offset(pagination.offset);
+      }
+      if (pagination?.limit !== undefined) {
+        query = query.limit(pagination.limit);
+      }
+
+      const buses = await query;
+
+      const data = buses.map(bus => ({
+        ...bus,
+        organization_id: organizationId,
+        metadata: bus.metadata ? (typeof bus.metadata === 'string' ? JSON.parse(bus.metadata) : bus.metadata) : null,
+      }));
+
+      return { data, total };
     } finally {
       await orgDb.destroy();
     }

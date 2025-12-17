@@ -70,23 +70,26 @@ export class StudentService {
     }
   }
 
+  /**
+   * Get all students with basic filtering and pagination
+   * For hierarchy filtering, use specific methods: getByParentId, getByRouteId, getByBusId
+   */
   async getAll(organizationId: string, filters?: {
-    bus_id?: string;
-    route_id?: string;
+    student_id?: string;
     class_grade?: string;
     is_active?: boolean;
-  }): Promise<Student[]> {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: Student[]; total: number }> {
     const organization = await this.organizationService.getById(organizationId);
     const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
     
     try {
       let query = orgDb('students').select('*');
 
-      if (filters?.bus_id) {
-        query = query.where({ assigned_bus_id: filters.bus_id });
-      }
-      if (filters?.route_id) {
-        query = query.where({ assigned_route_id: filters.route_id });
+      // Direct filtering only
+      if (filters?.student_id) {
+        query = query.where({ id: filters.student_id });
       }
       if (filters?.class_grade) {
         query = query.where({ class_grade: filters.class_grade });
@@ -95,13 +98,28 @@ export class StudentService {
         query = query.where({ is_active: filters.is_active });
       }
 
+      // Get total count before pagination
+      const countQuery = query.clone().clearSelect().clearOrder().count('* as total').first();
+      const countResult = await countQuery;
+      const total = parseInt(countResult?.total as string) || 0;
+
+      // Apply pagination if provided
+      if (filters?.offset !== undefined) {
+        query = query.offset(filters.offset);
+      }
+      if (filters?.limit !== undefined) {
+        query = query.limit(filters.limit);
+      }
+
       const students = await query;
       
       // Add organization_id to each student for consistency
-      return students.map(student => ({
+      const data = students.map(student => ({
         ...student,
         organization_id: organizationId,
       })) as Student[];
+
+      return { data, total };
     } finally {
       await orgDb.destroy();
     }
@@ -245,18 +263,135 @@ export class StudentService {
     }
   }
 
-  async getByParentId(parentId: string, organizationId: string): Promise<Student[]> {
+  /**
+   * Get students by parent ID - Micro function
+   */
+  async getByParentId(parentId: string, organizationId: string, pagination?: {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: Student[]; total: number }> {
     const organization = await this.organizationService.getById(organizationId);
     const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
     
     try {
-      const students = await orgDb('students')
-        .where({ parent_id: parentId });
+      let query = orgDb('students').where({ parent_id: parentId });
+
+      // Get total count
+      const countResult = await query.clone().count('* as total').first();
+      const total = parseInt(countResult?.total as string) || 0;
+
+      // Apply pagination if provided
+      if (pagination?.offset !== undefined) {
+        query = query.offset(pagination.offset);
+      }
+      if (pagination?.limit !== undefined) {
+        query = query.limit(pagination.limit);
+      }
+
+      const students = await query;
       
-      return students.map(student => ({
+      const data = students.map(student => ({
         ...student,
         organization_id: organizationId,
       })) as Student[];
+
+      return { data, total };
+    } finally {
+      await orgDb.destroy();
+    }
+  }
+
+  /**
+   * Get students by route ID - Micro function
+   */
+  async getByRouteId(routeId: string, organizationId: string, pagination?: {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: Student[]; total: number }> {
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+    
+    try {
+      let query = orgDb('students').where({ assigned_route_id: routeId });
+
+      // Get total count
+      const countResult = await query.clone().count('* as total').first();
+      const total = parseInt(countResult?.total as string) || 0;
+
+      // Apply pagination if provided
+      if (pagination?.offset !== undefined) {
+        query = query.offset(pagination.offset);
+      }
+      if (pagination?.limit !== undefined) {
+        query = query.limit(pagination.limit);
+      }
+
+      const students = await query;
+      
+      const data = students.map(student => ({
+        ...student,
+        organization_id: organizationId,
+      })) as Student[];
+
+      return { data, total };
+    } finally {
+      await orgDb.destroy();
+    }
+  }
+
+  /**
+   * Get students by bus ID - Micro function
+   * This uses routes: Get all routes of the bus, then get students from those routes
+   */
+  async getByBusId(busId: string, organizationId: string, pagination?: {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: Student[]; total: number }> {
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+    
+    try {
+      // Step 1: Get all routes assigned to this bus
+      const routes = await orgDb('routes')
+        .where({ assigned_bus_id: busId })
+        .select('id');
+      
+      const routeIds = routes.map(r => r.id).filter(Boolean);
+      
+      if (routeIds.length === 0) {
+        return { data: [], total: 0 };
+      }
+
+      // Step 2: Get students assigned to these routes
+      let query = orgDb('students')
+        .whereIn('assigned_route_id', routeIds)
+        .orWhere({ assigned_bus_id: busId }); // Also include direct bus assignment
+
+      // Get total count
+      const countResult = await query.clone().count('* as total').first();
+      const total = parseInt(countResult?.total as string) || 0;
+
+      // Apply pagination if provided
+      if (pagination?.offset !== undefined) {
+        query = query.offset(pagination.offset);
+      }
+      if (pagination?.limit !== undefined) {
+        query = query.limit(pagination.limit);
+      }
+
+      const students = await query;
+      
+      // Remove duplicates
+      const uniqueStudents = Array.from(
+        new Map(students.map(s => [s.id, s])).values()
+      );
+      
+      const data = uniqueStudents.map(student => ({
+        ...student,
+        organization_id: organizationId,
+      })) as Student[];
+
+      return { data, total };
     } finally {
       await orgDb.destroy();
     }

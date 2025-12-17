@@ -102,47 +102,73 @@ export class RouteService {
     }
   }
 
+  /**
+   * Get all routes with basic filtering and pagination
+   * For hierarchy filtering, use specific methods: getByBusId, getByStudentId, getByDriverId
+   */
   async getAll(organizationId: string, filters?: {
+    route_id?: string;
     is_active?: boolean;
-    bus_id?: string;
-  }): Promise<(Route & { stops: Stop[] })[]> {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: (Route & { stops: Stop[] })[]; total: number }> {
     const organization = await this.organizationService.getById(organizationId);
     const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
     
     try {
       let query = orgDb('routes').select('*');
 
+      // Direct filtering only
+      if (filters?.route_id) {
+        query = query.where({ 'routes.id': filters.route_id });
+      }
       if (filters?.is_active !== undefined) {
         query = query.where({ is_active: filters.is_active });
       }
-      if (filters?.bus_id) {
-        query = query.where({ assigned_bus_id: filters.bus_id });
+
+      // Get total count before pagination
+      const countQuery = query.clone().clearSelect().clearOrder().count('* as total').first();
+      const countResult = await countQuery;
+      const total = parseInt(countResult?.total as string) || 0;
+
+      // Apply pagination if provided
+      if (filters?.offset !== undefined) {
+        query = query.offset(filters.offset);
+      }
+      if (filters?.limit !== undefined) {
+        query = query.limit(filters.limit);
       }
 
       const routes = await query;
+      const routesWithStops = await this.enrichRoutesWithStops(routes, organizationId, orgDb);
 
-      const routesWithStops = await Promise.all(
-        routes.map(async (route) => {
-          const stops = await orgDb('stops')
-            .where({ route_id: route.id })
-            .orderBy('order')
-            .then(results => results.map(s => ({
-              ...s,
-              address: s.address ? (typeof s.address === 'string' ? JSON.parse(s.address) : s.address) : null,
-            })));
-
-          return {
-            ...route,
-            organization_id: organizationId,
-            stops,
-          };
-        })
-      );
-
-      return routesWithStops as (Route & { stops: Stop[] })[];
+      return { data: routesWithStops as (Route & { stops: Stop[] })[], total };
     } finally {
       await orgDb.destroy();
     }
+  }
+
+  /**
+   * Enrich routes with stops - Micro function
+   */
+  private async enrichRoutesWithStops(routes: any[], organizationId: string, orgDb: any): Promise<(Route & { stops: Stop[] })[]> {
+    return Promise.all(
+      routes.map(async (route) => {
+        const stops = await orgDb('stops')
+          .where({ route_id: route.id })
+          .orderBy('order')
+          .then((results: any[]) => results.map(s => ({
+            ...s,
+            address: s.address ? (typeof s.address === 'string' ? JSON.parse(s.address) : s.address) : null,
+          })));
+
+        return {
+          ...route,
+          organization_id: organizationId,
+          stops,
+        };
+      })
+    );
   }
 
   async getById(id: string, organizationId: string): Promise<Route & { stops: Stop[] }> {
@@ -295,6 +321,186 @@ export class RouteService {
         message: 'Route deleted',
         routeId: id,
       });
+    } finally {
+      await orgDb.destroy();
+    }
+  }
+
+  /**
+   * Get routes by bus ID - Micro function
+   */
+  async getByBusId(busId: string, organizationId: string, pagination?: {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: (Route & { stops: Stop[] })[]; total: number }> {
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+    
+    try {
+      let query = orgDb('routes').where({ assigned_bus_id: busId });
+
+      // Get total count
+      const countResult = await query.clone().count('* as total').first();
+      const total = parseInt(countResult?.total as string) || 0;
+
+      // Apply pagination if provided
+      if (pagination?.offset !== undefined) {
+        query = query.offset(pagination.offset);
+      }
+      if (pagination?.limit !== undefined) {
+        query = query.limit(pagination.limit);
+      }
+
+      const routes = await query;
+      const routesWithStops = await this.enrichRoutesWithStops(routes, organizationId, orgDb);
+
+      return { data: routesWithStops as (Route & { stops: Stop[] })[], total };
+    } finally {
+      await orgDb.destroy();
+    }
+  }
+
+  /**
+   * Get route by student ID - Micro function
+   * Uses hierarchy: student -> route (direct assignment)
+   */
+  async getByStudentId(studentId: string, organizationId: string): Promise<{ data: (Route & { stops: Stop[] })[]; total: number }> {
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+    
+    try {
+      // Get student's route ID
+      const student = await orgDb('students')
+        .where({ id: studentId })
+        .select('assigned_route_id')
+        .first();
+      
+      if (!student?.assigned_route_id) {
+        return { data: [], total: 0 };
+      }
+
+      // Get route with stops
+      const route = await orgDb('routes')
+        .where({ id: student.assigned_route_id })
+        .first();
+
+      if (!route) {
+        return { data: [], total: 0 };
+      }
+
+      const stops = await orgDb('stops')
+        .where({ route_id: route.id })
+        .orderBy('order')
+        .then((results: any[]) => results.map(s => ({
+          ...s,
+          address: s.address ? (typeof s.address === 'string' ? JSON.parse(s.address) : s.address) : null,
+        })));
+
+      const routeWithStops = {
+        ...route,
+        organization_id: organizationId,
+        stops,
+      };
+
+      return { data: [routeWithStops] as (Route & { stops: Stop[] })[], total: 1 };
+    } finally {
+      await orgDb.destroy();
+    }
+  }
+
+  /**
+   * Get routes by multiple student IDs - Micro function
+   * Returns unique routes assigned to the given students
+   */
+  async getRoutesByStudentIds(studentIds: string[], organizationId: string, pagination?: {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: (Route & { stops: Stop[] })[]; total: number }> {
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+    
+    try {
+      // Get unique route IDs from students
+      const students = await orgDb('students')
+        .whereIn('id', studentIds)
+        .whereNotNull('assigned_route_id')
+        .select('assigned_route_id')
+        .distinct();
+      
+      const routeIds = students.map(s => s.assigned_route_id).filter(Boolean);
+      
+      if (routeIds.length === 0) {
+        return { data: [], total: 0 };
+      }
+
+      // Get routes with stops
+      let query = orgDb('routes')
+        .whereIn('routes.id', routeIds);
+
+      // Get total count
+      const countResult = await query.clone().count('* as total').first();
+      const total = parseInt(countResult?.total as string) || 0;
+
+      // Apply pagination if provided
+      if (pagination?.offset !== undefined) {
+        query = query.offset(pagination.offset);
+      }
+      if (pagination?.limit !== undefined) {
+        query = query.limit(pagination.limit);
+      }
+
+      const routes = await query;
+      const routesWithStops = await this.enrichRoutesWithStops(routes, organizationId, orgDb);
+
+      return { data: routesWithStops as (Route & { stops: Stop[] })[], total };
+    } finally {
+      await orgDb.destroy();
+    }
+  }
+
+  /**
+   * Get routes by driver ID - Micro function
+   * Uses hierarchy: driver -> bus -> routes
+   */
+  async getByDriverId(driverId: string, organizationId: string, pagination?: {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: (Route & { stops: Stop[] })[]; total: number }> {
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+    
+    try {
+      // Step 1: Get bus IDs for this driver
+      const buses = await orgDb('buses')
+        .where({ driver_id: driverId })
+        .select('id');
+      
+      const busIds = buses.map(b => b.id).filter(Boolean);
+      
+      if (busIds.length === 0) {
+        return { data: [], total: 0 };
+      }
+
+      // Step 2: Get routes for these buses
+      let query = orgDb('routes')
+        .whereIn('assigned_bus_id', busIds);
+
+      // Get total count
+      const countResult = await query.clone().count('* as total').first();
+      const total = parseInt(countResult?.total as string) || 0;
+
+      // Apply pagination if provided
+      if (pagination?.offset !== undefined) {
+        query = query.offset(pagination.offset);
+      }
+      if (pagination?.limit !== undefined) {
+        query = query.limit(pagination.limit);
+      }
+
+      const routes = await query;
+      const routesWithStops = await this.enrichRoutesWithStops(routes, organizationId, orgDb);
+
+      return { data: routesWithStops as (Route & { stops: Stop[] })[], total };
     } finally {
       await orgDb.destroy();
     }
