@@ -6,6 +6,7 @@ import { DatabaseService } from '../services/database.service';
 import { authenticate } from '../middleware/auth';
 import { logger } from '../config/logger';
 import { JWTUser } from '../types';
+import { extractRequestBodyData } from '../utils/request.util';
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -27,11 +28,17 @@ export async function authRoutes(fastify: FastifyInstance) {
         tags: ['Authentication'],
         body: {
           type: 'object',
-          required: ['email', 'password'],
+          required: ['data'],
           properties: {
-            email: { type: 'string', format: 'email' },
-            password: { type: 'string', minLength: 6 },
-            organizationCode: { type: 'string', description: 'Optional for superadmin login' },
+            data: {
+              type: 'object',
+              required: ['email', 'password'],
+              properties: {
+                email: { type: 'string', format: 'email' },
+                password: { type: 'string', minLength: 6 },
+                organizationCode: { type: 'string', description: 'Optional for superadmin login' },
+              },
+            },
           },
         },
         response: {
@@ -61,7 +68,8 @@ export async function authRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const body = loginSchema.parse(request.body);
+        const bodyData = extractRequestBodyData(request.body);
+        const body = loginSchema.parse(bodyData);
         let organizationId: string | undefined;
         
         let organizationCode: string | undefined;

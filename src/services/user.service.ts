@@ -2,6 +2,7 @@ import { UserRepository } from '../repositories/user.repository';
 import { AuthService } from './auth.service';
 import { DatabaseService } from './database.service';
 import { OrganizationService } from './organization.service';
+import { StudentService } from './student.service';
 import { User } from '../types';
 import { logger } from '../config/logger';
 
@@ -10,12 +11,14 @@ export class UserService {
   private authService: AuthService;
   private databaseService: DatabaseService;
   private organizationService: OrganizationService;
+  private studentService: StudentService;
 
   constructor() {
     this.repository = new UserRepository();
     this.authService = new AuthService();
     this.databaseService = new DatabaseService();
     this.organizationService = new OrganizationService();
+    this.studentService = new StudentService();
   }
 
   async create(data: {
@@ -220,6 +223,42 @@ export class UserService {
       throw new Error('User not found');
     }
 
+    // If the user is a parent, delete all associated students first
+    if (user.role === 'parent') {
+      try {
+        // Get all students with this parent_id
+        const students = await this.studentService.getByParentId(id, organizationId);
+        
+        logger.info({
+          message: 'Deleting students associated with parent',
+          parentId: id,
+          studentCount: students.length,
+          organizationCode: organization.code,
+        });
+
+        // Delete each student
+        for (const student of students) {
+          await this.studentService.delete(student.id, organizationId);
+        }
+
+        logger.info({
+          message: 'All students deleted for parent',
+          parentId: id,
+          deletedCount: students.length,
+          organizationCode: organization.code,
+        });
+      } catch (error: any) {
+        logger.error({
+          message: 'Error deleting students for parent',
+          parentId: id,
+          error: error.message,
+          stack: error.stack,
+          organizationCode: organization.code,
+        });
+        throw new Error(`Failed to delete students for parent: ${error.message}`);
+      }
+    }
+
     // Delete user from organization database
     await orgDb('users')
       .where({ id })
@@ -228,6 +267,7 @@ export class UserService {
     logger.info({
       message: 'User deleted',
       userId: id,
+      userRole: user.role,
       organizationCode: organization.code,
     });
   }
