@@ -6,6 +6,10 @@ import { hasPermission } from '../rbac/hasPermission';
 import { PERMISSIONS } from '../rbac/permissions';
 import { JWTUser } from '../types';
 import { logger } from '../config/logger';
+import { commonSchemas, commonResponses } from '../schemas/common.schemas';
+import { organizationSchemas } from '../schemas/organization.schemas';
+import { sendErrorResponse } from '../utils/error-handler.util';
+import { extractRequestBodyData } from '../utils/request.util';
 
 const createOrgSchema = z.object({
   name: z.string().min(1),
@@ -32,73 +36,36 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
     '/',
     {
       schema: {
-        description: 'Create a new organization. Optionally create an admin user for the organization. If admin is provided, a token will be returned.',
+        description: 'Create a new organization and optionally create an admin user. If admin is provided, a JWT token will be returned for immediate use. This endpoint is public and used for initial system setup.',
         tags: ['Organizations'],
-        body: {
-          type: 'object',
-          required: ['name', 'code'],
-          properties: {
-            name: { type: 'string' },
-            code: { type: 'string' },
-            primary_color: { type: 'string' },
-            contact_email: { type: 'string', format: 'email' },
-            contact_phone: { type: 'string' },
-            address: { type: 'string' },
-            admin: {
-              type: 'object',
-              description: 'Optional: Create admin user along with organization. If provided, a JWT token will be returned.',
-              properties: {
-                name: { type: 'string' },
-                email: { type: 'string', format: 'email' },
-                password: { type: 'string', minLength: 6 },
-                phone: { type: 'string' },
-              },
-              required: ['name', 'email', 'password'],
-            },
-          },
-        },
+        summary: 'Create organization',
+        body: organizationSchemas.CreateOrganizationRequest,
         response: {
           201: {
-            type: 'object',
-            properties: {
-              id: { type: 'string', format: 'uuid' },
-              name: { type: 'string' },
-              code: { type: 'string' },
-              primary_color: { type: 'string' },
-              contact_email: { type: 'string', format: 'email' },
-              contact_phone: { type: 'string' },
-              address: { type: 'string' },
-              is_active: { type: 'boolean' },
-              created_at: { type: 'string', format: 'date-time' },
-              updated_at: { type: 'string', format: 'date-time' },
-              admin: {
-                type: 'object',
-                description: 'Present only if admin was created',
-                properties: {
-                  user: {
-                    type: 'object',
-                    properties: {
-                      id: { type: 'string', format: 'uuid' },
-                      email: { type: 'string' },
-                      name: { type: 'string' },
-                      role: { type: 'string', enum: ['admin'] },
-                      organization_id: { type: 'string', format: 'uuid' },
-                    },
-                  },
-                  token: { 
-                    type: 'string',
-                    description: 'JWT token for the admin user. Use this for authenticated requests.',
-                  },
-                },
+            description: 'Organization created successfully',
+            content: {
+              'application/json': {
+                schema: organizationSchemas.OrganizationWithAdmin,
               },
             },
           },
+          400: commonResponses[400],
+          409: {
+            description: 'Conflict - Organization code already exists',
+            content: {
+              'application/json': {
+                schema: commonSchemas.ErrorResponse,
+              },
+            },
+          },
+          500: commonResponses[500],
         },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const data = createOrgSchema.parse(request.body);
+        const bodyData = extractRequestBodyData(request.body);
+        const data = createOrgSchema.parse(bodyData);
         
         // Log request data for debugging
         logger.info({
@@ -142,8 +109,7 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
           stack: error.stack,
           body: request.body,
         });
-        const statusCode = error.message.includes('already exists') ? 409 : 500;
-        reply.code(statusCode).send({ error: error.message });
+        sendErrorResponse(reply, error);
       }
     }
   );
@@ -153,13 +119,37 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
     '/check-code/:code',
     {
       schema: {
-        description: 'Check if an organization code is available',
+        description: 'Check if an organization code is available. This is a public endpoint for UI validation during organization registration.',
         tags: ['Organizations'],
+        summary: 'Check code availability',
         params: {
           type: 'object',
+          required: ['code'],
           properties: {
-            code: { type: 'string' },
+            code: {
+              type: 'string',
+              description: 'Organization code to check',
+            },
           },
+        },
+        response: {
+          200: {
+            description: 'Code availability status',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    code: { type: 'string' },
+                    available: { type: 'boolean', description: 'True if code is available, false if already taken' },
+                  },
+                  required: ['code', 'available'],
+                },
+              },
+            },
+          },
+          400: commonResponses[400],
+          500: commonResponses[500],
         },
       },
     },
@@ -172,7 +162,7 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
           available,
         });
       } catch (error: any) {
-        reply.code(500).send({ error: error.message });
+        sendErrorResponse(reply, error);
       }
     }
   );
@@ -183,14 +173,35 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
     {
       preHandler: [authenticate],
       schema: {
-        description: 'Get organization by ID',
+        description: 'Get organization details by ID. Users can only access their own organization unless they are superadmin.',
         tags: ['Organizations'],
         security: [{ bearerAuth: [] }],
+        summary: 'Get organization by ID',
         params: {
           type: 'object',
+          required: ['id'],
           properties: {
-            id: { type: 'string' },
+            id: {
+              type: 'string',
+              format: 'uuid',
+              description: 'Organization UUID',
+            },
           },
+        },
+        response: {
+          200: {
+            description: 'Organization details',
+            content: {
+              'application/json': {
+                schema: organizationSchemas.Organization,
+              },
+            },
+          },
+          400: commonResponses[400],
+          401: commonResponses[401],
+          403: commonResponses[403],
+          404: commonResponses[404],
+          500: commonResponses[500],
         },
       },
     },
@@ -211,7 +222,7 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
 
         reply.send(organization);
       } catch (error: any) {
-        reply.code(error.message.includes('not found') ? 404 : 500).send({ error: error.message });
+        sendErrorResponse(reply, error);
       }
     }
   );
@@ -222,25 +233,44 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
     {
       preHandler: [authenticate],
       schema: {
-        description: 'Update organization',
+        description: 'Update organization information. Users can only update their own organization unless they are superadmin. All fields are optional.',
         tags: ['Organizations'],
         security: [{ bearerAuth: [] }],
+        summary: 'Update organization',
         params: {
           type: 'object',
+          required: ['id'],
           properties: {
-            id: { type: 'string', format: 'uuid' },
+            id: {
+              type: 'string',
+              format: 'uuid',
+              description: 'Organization UUID',
+            },
           },
         },
-        body: {
-          type: 'object',
-          properties: {
-            name: { type: 'string' },
-            code: { type: 'string' },
-            primary_color: { type: 'string', pattern: '^#[0-9A-F]{6}$' },
-            contact_email: { type: 'string', format: 'email' },
-            contact_phone: { type: 'string' },
-            address: { type: 'string' },
+        body: organizationSchemas.UpdateOrganizationRequest,
+        response: {
+          200: {
+            description: 'Organization updated successfully',
+            content: {
+              'application/json': {
+                schema: organizationSchemas.Organization,
+              },
+            },
           },
+          400: commonResponses[400],
+          401: commonResponses[401],
+          403: commonResponses[403],
+          404: commonResponses[404],
+          409: {
+            description: 'Conflict - Organization code already exists',
+            content: {
+              'application/json': {
+                schema: commonSchemas.ErrorResponse,
+              },
+            },
+          },
+          500: commonResponses[500],
         },
       },
     },
@@ -257,16 +287,12 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
           return reply.code(403).send({ error: 'Access denied' });
         }
 
-        const data = updateOrgSchema.parse(request.body);
+        const bodyData = extractRequestBodyData(request.body);
+        const data = updateOrgSchema.parse(bodyData);
         const updated = await organizationService.update(params.id, data);
         reply.send(updated);
       } catch (error: any) {
-        if (error.name === 'ZodError') {
-          return reply.code(400).send({ error: 'Validation error', details: error.errors });
-        }
-        const statusCode = error.message.includes('not found') ? 404 :
-                          error.message.includes('already exists') ? 409 : 400;
-        reply.code(statusCode).send({ error: error.message });
+        sendErrorResponse(reply, error);
       }
     }
   );

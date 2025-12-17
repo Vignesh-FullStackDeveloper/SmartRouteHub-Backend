@@ -154,6 +154,8 @@ export interface Role {
   name: string;
   description?: string;
   permission_ids: string[]; // Array of permission IDs
+  type: 'default' | 'custom'; // Role type: default (system) or custom (user-created)
+  allow_delete: boolean; // Whether the role can be deleted
   created_at: Date;
   updated_at: Date;
   permissions?: Permission[]; // Populated when fetching with permissions

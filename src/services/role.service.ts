@@ -50,11 +50,14 @@ export class RoleService {
     }
 
     // Create role with permission_ids array
+    // Custom roles created by organization admin have type='custom' and allow_delete=true
     const [role] = await db('roles')
       .insert({
         name: data.name,
         description: data.description,
         permission_ids: JSON.stringify(data.permissionIds || []),
+        type: 'custom',
+        allow_delete: true,
       })
       .returning('*');
 
@@ -143,10 +146,27 @@ export class RoleService {
   /**
    * Get all roles in an organization
    */
-  async getByOrganization(organizationCode: string): Promise<(Role & { permissions: Permission[] })[]> {
+  async getByOrganization(organizationCode: string, filters?: {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: (Role & { permissions: Permission[] })[]; total: number }> {
     const db = this.getOrgDb(organizationCode);
-    const roles = await db('roles')
-      .orderBy('name', 'asc');
+    let query = db('roles').orderBy('name', 'asc');
+
+    // Get total count before pagination
+    const countQuery = query.clone().clearSelect().clearOrder().count('* as total').first();
+    const countResult = await countQuery;
+    const total = parseInt(countResult?.total as string) || 0;
+
+    // Apply pagination if provided
+    if (filters?.offset !== undefined) {
+      query = query.offset(filters.offset);
+    }
+    if (filters?.limit !== undefined) {
+      query = query.limit(filters.limit);
+    }
+
+    const roles = await query;
 
     // Fetch permissions for each role
     const rolesWithPermissions = await Promise.all(
@@ -156,7 +176,7 @@ export class RoleService {
       })
     );
 
-    return rolesWithPermissions;
+    return { data: rolesWithPermissions, total };
   }
 
   /**
@@ -178,9 +198,33 @@ export class RoleService {
 
   /**
    * Delete a role (only if not assigned to any users)
+   * Only superadmin can delete default roles. Organization admin can only delete custom roles.
    */
-  async delete(organizationCode: string, id: string): Promise<void> {
+  async delete(organizationCode: string, id: string, userRole: 'superadmin' | 'admin'): Promise<void> {
     const db = this.getOrgDb(organizationCode);
+
+    // Get the role to check its type and allow_delete
+    const role = await db('roles')
+      .where({ id })
+      .first();
+
+    if (!role) {
+      throw new Error('Role not found');
+    }
+
+    // Check if role can be deleted based on type and allow_delete
+    // Only superadmin can delete default roles
+    // Handle cases where type or allow_delete might be null (for existing roles before migration)
+    // Default roles are: organization_admin, parent, driver
+    const isDefaultRoleName = ['organization_admin', 'parent', 'driver'].includes(role.name);
+    const roleType = role.type || (isDefaultRoleName ? 'default' : 'custom');
+    const canDelete = role.allow_delete !== false && (role.allow_delete !== null || !isDefaultRoleName);
+    
+    if (roleType === 'default' || !canDelete) {
+      if (userRole !== 'superadmin') {
+        throw new Error(`Cannot delete ${roleType} role "${role.name}": Only superadmin can delete default roles. Organization admins can only delete custom roles.`);
+      }
+    }
 
     // Check if role is assigned to any users
     const userCount = await db('users')
@@ -199,6 +243,8 @@ export class RoleService {
       message: 'Role deleted',
       roleId: id,
       organizationCode,
+      roleType: role.type,
+      deletedBy: userRole,
     });
   }
 

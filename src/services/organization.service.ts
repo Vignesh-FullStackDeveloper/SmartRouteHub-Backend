@@ -373,6 +373,12 @@ export class OrganizationService {
         .whereIn('code', defaultPermissions.map(p => p.code))
         .select('*');
 
+      // Create a map of permission codes to IDs for easy lookup
+      const permissionMap = new Map<string, string>();
+      allPermissions.forEach((p: any) => {
+        permissionMap.set(p.code, p.id);
+      });
+
       // Get all permission IDs
       const permissionIds = allPermissions.map((p: any) => p.id);
 
@@ -388,6 +394,8 @@ export class OrganizationService {
             name: 'organization_admin',
             description: 'Organization administrator with full access to all permissions',
             permission_ids: JSON.stringify(permissionIds),
+            type: 'default',
+            allow_delete: false,
           })
           .returning('*');
         orgAdminRole = newRole;
@@ -400,10 +408,13 @@ export class OrganizationService {
         });
       } else {
         // Update existing role with all permissions (in case new permissions were added)
+        // Also ensure type and allow_delete are set correctly for default roles
         await orgDb('roles')
           .where({ id: orgAdminRole.id })
           .update({
             permission_ids: JSON.stringify(permissionIds),
+            type: 'default',
+            allow_delete: false,
           });
 
         logger.info({
@@ -411,6 +422,121 @@ export class OrganizationService {
           organizationCode,
           roleId: orgAdminRole.id,
           permissionCount: permissionIds.length,
+        });
+      }
+
+      // Create parent role with appropriate permissions
+      const parentPermissionCodes = [
+        PERMISSIONS.STUDENT.GET,      // View their own children
+        PERMISSIONS.ROUTE.GET,        // View routes for their children
+        PERMISSIONS.BUS.GET,          // View buses for their children
+        PERMISSIONS.TRIP.GET,         // View trips related to their children
+        PERMISSIONS.LOCATION.GET,     // View bus location
+        PERMISSIONS.USER.GET,         // View their own user info
+        PERMISSIONS.USER.UPDATE,      // Update their own user info
+      ];
+
+      const parentPermissionIds = parentPermissionCodes
+        .map(code => permissionMap.get(code))
+        .filter((id): id is string => id !== undefined);
+
+      let parentRole = await orgDb('roles')
+        .where({ name: 'parent' })
+        .first();
+
+      if (!parentRole) {
+        const [newParentRole] = await orgDb('roles')
+          .insert({
+            name: 'parent',
+            description: 'Parent role with permissions to view and manage their children\'s information',
+            permission_ids: JSON.stringify(parentPermissionIds),
+            type: 'default',
+            allow_delete: false,
+          })
+          .returning('*');
+        parentRole = newParentRole;
+
+        logger.info({
+          message: 'Parent role created',
+          organizationCode,
+          roleId: parentRole.id,
+          permissionCount: parentPermissionIds.length,
+        });
+      } else {
+        // Update existing parent role with permissions
+        // Also ensure type and allow_delete are set correctly for default roles
+        await orgDb('roles')
+          .where({ id: parentRole.id })
+          .update({
+            permission_ids: JSON.stringify(parentPermissionIds),
+            type: 'default',
+            allow_delete: false,
+          });
+
+        logger.info({
+          message: 'Parent role updated with permissions',
+          organizationCode,
+          roleId: parentRole.id,
+          permissionCount: parentPermissionIds.length,
+        });
+      }
+
+      // Create driver role with appropriate permissions
+      const driverPermissionCodes = [
+        PERMISSIONS.BUS.GET,          // View their assigned bus
+        PERMISSIONS.ROUTE.GET,        // View routes for their assigned bus
+        PERMISSIONS.TRIP.GET,         // View trips for their assigned bus
+        PERMISSIONS.TRIP.CREATE,      // Start new trips
+        PERMISSIONS.TRIP.UPDATE,      // Update trip information
+        PERMISSIONS.LOCATION.GET,     // View bus location
+        PERMISSIONS.LOCATION.UPDATE,  // Update bus location
+        PERMISSIONS.STUDENT.GET,      // View students on their bus
+        PERMISSIONS.USER.GET,         // View their own user info
+        PERMISSIONS.USER.UPDATE,      // Update their own user info
+      ];
+
+      const driverPermissionIds = driverPermissionCodes
+        .map(code => permissionMap.get(code))
+        .filter((id): id is string => id !== undefined);
+
+      let driverRole = await orgDb('roles')
+        .where({ name: 'driver' })
+        .first();
+
+      if (!driverRole) {
+        const [newDriverRole] = await orgDb('roles')
+          .insert({
+            name: 'driver',
+            description: 'Driver role with permissions to manage trips, update location, and view assigned bus information',
+            permission_ids: JSON.stringify(driverPermissionIds),
+            type: 'default',
+            allow_delete: false,
+          })
+          .returning('*');
+        driverRole = newDriverRole;
+
+        logger.info({
+          message: 'Driver role created',
+          organizationCode,
+          roleId: driverRole.id,
+          permissionCount: driverPermissionIds.length,
+        });
+      } else {
+        // Update existing driver role with permissions
+        // Also ensure type and allow_delete are set correctly for default roles
+        await orgDb('roles')
+          .where({ id: driverRole.id })
+          .update({
+            permission_ids: JSON.stringify(driverPermissionIds),
+            type: 'default',
+            allow_delete: false,
+          });
+
+        logger.info({
+          message: 'Driver role updated with permissions',
+          organizationCode,
+          roleId: driverRole.id,
+          permissionCount: driverPermissionIds.length,
         });
       }
 

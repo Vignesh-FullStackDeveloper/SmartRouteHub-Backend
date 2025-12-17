@@ -90,7 +90,9 @@ export class UserService {
   async getAll(organizationId: string, filters?: {
     role?: string;
     is_active?: boolean;
-  }): Promise<User[]> {
+    limit?: number;
+    offset?: number;
+  }): Promise<{ data: User[]; total: number }> {
     // Get organization code to access organization database
     const organization = await this.organizationService.getById(organizationId);
     const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
@@ -105,13 +107,28 @@ export class UserService {
       query = query.where({ is_active: filters.is_active });
     }
 
+    // Get total count before pagination
+    const countQuery = query.clone().clearSelect().clearOrder().count('* as total').first();
+    const countResult = await countQuery;
+    const total = parseInt(countResult?.total as string) || 0;
+
+    // Apply pagination if provided
+    if (filters?.offset !== undefined) {
+      query = query.offset(filters.offset);
+    }
+    if (filters?.limit !== undefined) {
+      query = query.limit(filters.limit);
+    }
+
     const users = await query;
     
     // Add organization_id to each user for consistency
-    return users.map(user => ({
+    const data = users.map(user => ({
       ...user,
       organization_id: organizationId,
     })) as User[];
+
+    return { data, total };
   }
 
   async getById(id: string, organizationId: string): Promise<User> {

@@ -8,6 +8,7 @@ import { PERMISSIONS } from '../rbac/permissions';
 import { JWTUser } from '../types';
 import { sendSuccess, sendError, parsePagination, getPaginationMeta } from '../utils/response.util';
 import { logger } from '../config/logger';
+import { extractRequestBodyData } from '../utils/request.util';
 
 const createBusSchema = z.object({
   bus_number: z.string().min(1),
@@ -73,7 +74,8 @@ export async function busesRoutes(fastify: FastifyInstance) {
           return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
         }
 
-        const data = createBusSchema.parse(request.body);
+        const bodyData = extractRequestBodyData(request.body);
+        const data = createBusSchema.parse(bodyData);
         const bus = await busService.create(data, request.user!.organization_id!);
         reply.code(201).send(bus);
       } catch (error: any) {
@@ -392,7 +394,8 @@ export async function busesRoutes(fastify: FastifyInstance) {
           return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
         }
 
-        const data = updateBusSchema.parse(request.body);
+        const bodyData = extractRequestBodyData(request.body);
+        const data = updateBusSchema.parse(bodyData);
         const updated = await busService.update(
           params.id,
           data,

@@ -5,6 +5,7 @@ import { authenticate } from '../middleware/auth';
 import { hasPermission } from '../rbac/hasPermission';
 import { PERMISSIONS } from '../rbac/permissions';
 import { JWTUser } from '../types';
+import { extractRequestBodyData } from '../utils/request.util';
 
 const startTripSchema = z.object({
   bus_id: z.string().uuid(),
@@ -74,7 +75,8 @@ export async function tripsRoutes(fastify: FastifyInstance) {
           return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
         }
 
-        const data = startTripSchema.parse(request.body);
+        const bodyData = extractRequestBodyData(request.body);
+        const data = startTripSchema.parse(bodyData);
         const trip = await tripService.start(
           data,
           user.id,
@@ -123,7 +125,8 @@ export async function tripsRoutes(fastify: FastifyInstance) {
           }
         }
 
-        const data = updateLocationSchema.parse(request.body);
+        const bodyData = extractRequestBodyData(request.body);
+        const data = updateLocationSchema.parse(bodyData);
         const trip = await tripService.updateLocation(
           params.id,
           data,

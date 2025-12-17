@@ -7,6 +7,10 @@ import { PERMISSIONS } from '../rbac/permissions';
 import { JWTUser } from '../types';
 import { sendSuccess, sendError, parsePagination, getPaginationMeta } from '../utils/response.util';
 import { logger } from '../config/logger';
+import { extractRequestBodyData } from '../utils/request.util';
+import { commonSchemas, commonResponses } from '../schemas/common.schemas';
+import { driverSchemas } from '../schemas/driver.schemas';
+import { sendErrorResponse } from '../utils/error-handler.util';
 
 const createDriverSchema = z.object({
   name: z.string().min(1),
@@ -35,38 +39,32 @@ export async function driversRoutes(fastify: FastifyInstance) {
     {
       preHandler: [authenticate],
       schema: {
-        description: 'Create a new driver',
+        description: 'Create a new driver user. Requires user:create permission. Driver ID must be unique within the organization.',
         tags: ['Drivers'],
         security: [{ bearerAuth: [] }],
-        body: {
-          type: 'object',
-          required: ['name', 'email', 'password', 'driver_id'],
-          properties: {
-            name: { type: 'string' },
-            email: { type: 'string', format: 'email' },
-            phone: { type: 'string' },
-            password: { type: 'string', minLength: 6 },
-            driver_id: { type: 'string' },
-          },
-        },
+        summary: 'Create driver',
+        body: driverSchemas.CreateDriverRequest,
         response: {
           201: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              name: { type: 'string' },
-              email: { type: 'string' },
-              phone: { type: 'string' },
-              driver_id: { type: 'string' },
-              organization_id: { type: 'string' },
-              is_active: { type: 'boolean' },
-              created_at: { type: 'string', format: 'date-time' },
-              updated_at: { type: 'string', format: 'date-time' },
+            description: 'Driver created successfully',
+            content: {
+              'application/json': {
+                schema: driverSchemas.Driver,
+              },
             },
           },
-          400: { type: 'object', properties: { error: { type: 'string' } } },
-          403: { type: 'object', properties: { error: { type: 'string' } } },
-          409: { type: 'object', properties: { error: { type: 'string' } } },
+          400: commonResponses[400],
+          401: commonResponses[401],
+          403: commonResponses[403],
+          409: {
+            description: 'Conflict - Email or driver ID already exists',
+            content: {
+              'application/json': {
+                schema: commonSchemas.ErrorResponse,
+              },
+            },
+          },
+          500: commonResponses[500],
         },
       },
     },
@@ -80,15 +78,12 @@ export async function driversRoutes(fastify: FastifyInstance) {
           return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
         }
 
-        const data = createDriverSchema.parse(request.body);
+        const bodyData = extractRequestBodyData(request.body);
+        const data = createDriverSchema.parse(bodyData);
         const driver = await driverService.create(data, user.organization_id);
         reply.code(201).send(driver);
       } catch (error: any) {
-        if (error.name === 'ZodError') {
-          return reply.code(400).send({ error: 'Validation error', details: error.errors });
-        }
-        const statusCode = error.message.includes('already exists') ? 409 : 400;
-        reply.code(statusCode).send({ error: error.message });
+        sendErrorResponse(reply, error);
       }
     }
   );
@@ -340,7 +335,8 @@ export async function driversRoutes(fastify: FastifyInstance) {
           return reply.code(403).send({ error: 'Forbidden: Can only update own driver information' });
         }
 
-        const data = updateDriverSchema.parse(request.body);
+        const bodyData = extractRequestBodyData(request.body);
+        const data = updateDriverSchema.parse(bodyData);
         const updated = await driverService.update(
           params.id,
           data,

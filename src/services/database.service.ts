@@ -262,10 +262,13 @@ export class DatabaseService {
       table.string('name').notNullable(); // e.g., 'Fleet Manager', 'Route Coordinator'
       table.text('description').nullable();
       table.jsonb('permission_ids').notNullable().defaultTo('[]'); // Array of permission IDs
+      table.enum('type', ['default', 'custom']).notNullable().defaultTo('custom'); // Role type: default (system) or custom (user-created)
+      table.boolean('allow_delete').notNullable().defaultTo(true); // Whether the role can be deleted
       table.timestamps(true, true);
       
       table.unique('name'); // Role names must be unique within organization
       table.index('name');
+      table.index('type');
     });
 
     // Add role_id to users table to link users to custom roles

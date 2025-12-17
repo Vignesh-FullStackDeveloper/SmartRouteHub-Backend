@@ -1,19 +1,22 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { StudentService } from '../services/student.service';
-import { BusService } from '../services/bus.service';
 import { authenticate } from '../middleware/auth';
 import { hasPermission } from '../rbac/hasPermission';
 import { PERMISSIONS } from '../rbac/permissions';
 import { JWTUser } from '../types';
+import { commonSchemas, commonResponses } from '../schemas/common.schemas';
+import { studentSchemas } from '../schemas/student.schemas';
+import { sendErrorResponse } from '../utils/error-handler.util';
 import { sendSuccess, sendError, parsePagination, getPaginationMeta } from '../utils/response.util';
 import { logger } from '../config/logger';
+import { extractRequestBodyData } from '../utils/request.util';
 
 const createStudentSchema = z.object({
   name: z.string().min(1),
   class_grade: z.string().min(1),
   section: z.string().min(1),
-  parent_id: z.string().uuid().optional(),
+  parent_id: z.string().uuid(),
   parent_contact: z.string().min(1),
   pickup_point_id: z.string().uuid().optional(),
   assigned_bus_id: z.string().uuid().optional(),
@@ -21,11 +24,20 @@ const createStudentSchema = z.object({
   is_active: z.boolean().optional(),
 });
 
-const updateStudentSchema = createStudentSchema.partial();
+const updateStudentSchema = z.object({
+  name: z.string().min(1).optional(),
+  class_grade: z.string().min(1).optional(),
+  section: z.string().min(1).optional(),
+  parent_id: z.string().uuid(),
+  parent_contact: z.string().min(1).optional(),
+  pickup_point_id: z.string().uuid().optional(),
+  assigned_bus_id: z.string().uuid().optional(),
+  assigned_route_id: z.string().uuid().optional(),
+  is_active: z.boolean().optional(),
+});
 
 export async function studentsRoutes(fastify: FastifyInstance) {
   const studentService = new StudentService();
-  const busService = new BusService();
 
   // Create student
   fastify.post(
@@ -33,46 +45,32 @@ export async function studentsRoutes(fastify: FastifyInstance) {
     {
       preHandler: [authenticate],
       schema: {
-        description: 'Create a new student',
+        description: 'Create a new student. Requires parent_id (mandatory). Only users with student:create permission can create students.',
         tags: ['Students'],
         security: [{ bearerAuth: [] }],
-        body: {
-          type: 'object',
-          required: ['name', 'class_grade', 'section', 'parent_contact'],
-          properties: {
-            name: { type: 'string' },
-            class_grade: { type: 'string' },
-            section: { type: 'string' },
-            parent_id: { type: 'string', format: 'uuid', description: 'Optional: Parent user ID' },
-            parent_contact: { type: 'string' },
-            pickup_point_id: { type: 'string', format: 'uuid' },
-            assigned_bus_id: { type: 'string', format: 'uuid' },
-            assigned_route_id: { type: 'string', format: 'uuid' },
-            is_active: { type: 'boolean', description: 'Optional: Defaults to true if not provided' },
-          },
-        },
+        summary: 'Create student',
+        body: studentSchemas.CreateStudentRequest,
         response: {
           201: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              organization_id: { type: 'string' },
-              name: { type: 'string' },
-              class_grade: { type: 'string' },
-              section: { type: 'string' },
-              parent_id: { type: 'string' },
-              parent_contact: { type: 'string' },
-              pickup_point_id: { type: 'string' },
-              assigned_bus_id: { type: 'string' },
-              assigned_route_id: { type: 'string' },
-              is_active: { type: 'boolean' },
-              created_at: { type: 'string', format: 'date-time' },
-              updated_at: { type: 'string', format: 'date-time' },
+            description: 'Student created successfully',
+            content: {
+              'application/json': {
+                schema: studentSchemas.Student,
+              },
             },
           },
-          400: { type: 'object', properties: { error: { type: 'string' } } },
-          403: { type: 'object', properties: { error: { type: 'string' } } },
-          404: { type: 'object', properties: { error: { type: 'string' } } },
+          400: commonResponses[400],
+          401: commonResponses[401],
+          403: commonResponses[403],
+          404: {
+            description: 'Not Found - Parent not found',
+            content: {
+              'application/json': {
+                schema: commonSchemas.ErrorResponse,
+              },
+            },
+          },
+          500: commonResponses[500],
         },
       },
     },
@@ -86,15 +84,12 @@ export async function studentsRoutes(fastify: FastifyInstance) {
           return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
         }
 
-        const data = createStudentSchema.parse(request.body);
+        const bodyData = extractRequestBodyData(request.body);
+        const data = createStudentSchema.parse(bodyData);
         const student = await studentService.create(data, user.organization_id);
         reply.code(201).send(student);
       } catch (error: any) {
-        if (error.name === 'ZodError') {
-          return reply.code(400).send({ error: 'Validation error', details: error.errors });
-        }
-        const statusCode = error.message.includes('not found') ? 404 : 400;
-        reply.code(statusCode).send({ error: error.message });
+        sendErrorResponse(reply, error);
       }
     }
   );
@@ -105,62 +100,45 @@ export async function studentsRoutes(fastify: FastifyInstance) {
     {
       preHandler: [authenticate],
       schema: {
-        description: 'Get all students',
+        description: 'Get all students with optional filtering. Parents see only their children. Admins see all students.',
         tags: ['Students'],
         security: [{ bearerAuth: [] }],
-        querystring: {
-          type: 'object',
-          properties: {
-            student_id: { type: 'string', format: 'uuid', description: 'Filter by student ID' },
-            parent_id: { type: 'string', format: 'uuid', description: 'Filter by parent ID' },
-            bus_id: { type: 'string', format: 'uuid', description: 'Filter by bus ID' },
-            route_id: { type: 'string', format: 'uuid', description: 'Filter by route ID' },
-            class_grade: { type: 'string', description: 'Filter by class grade' },
-            is_active: { type: 'boolean', description: 'Filter by active status' },
-            limit: { type: 'number', minimum: 1, description: 'Number of records to return (optional)' },
-            offset: { type: 'number', minimum: 0, description: 'Number of records to skip (optional)' },
-          },
-        },
+        summary: 'List students',
+        querystring: studentSchemas.StudentQuery,
         response: {
           200: {
-            type: 'object',
-            properties: {
-              success: { type: 'boolean' },
-              data: {
-                type: 'array',
-                items: {
+            description: 'List of students',
+            content: {
+              'application/json': {
+                schema: {
                   type: 'object',
                   properties: {
-                    id: { type: 'string' },
-                    organization_id: { type: 'string' },
-                    name: { type: 'string' },
-                    class_grade: { type: 'string' },
-                    section: { type: 'string' },
-                    parent_id: { type: 'string' },
-                    parent_contact: { type: 'string' },
-                    pickup_point_id: { type: 'string' },
-                    assigned_bus_id: { type: 'string' },
-                    assigned_route_id: { type: 'string' },
-                    is_active: { type: 'boolean' },
-                    created_at: { type: 'string', format: 'date-time' },
-                    updated_at: { type: 'string', format: 'date-time' },
+                    success: { type: 'boolean' },
+                    data: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        additionalProperties: true,
+                      },
+                    },
+                    pagination: {
+                      type: 'object',
+                      nullable: true,
+                      properties: {
+                        total: { type: 'number' },
+                        limit: { type: 'number' },
+                        offset: { type: 'number' },
+                        hasMore: { type: 'boolean' },
+                      },
+                    },
+                    message: { type: 'string', nullable: true },
                   },
                 },
               },
-              pagination: {
-                type: 'object',
-                nullable: true,
-                properties: {
-                  total: { type: 'number' },
-                  limit: { type: 'number' },
-                  offset: { type: 'number' },
-                  hasMore: { type: 'boolean' },
-                },
-              },
-              message: { type: 'string', nullable: true },
             },
           },
           400: { type: 'object', properties: { success: { type: 'boolean' }, error: { type: 'string' }, details: { type: 'object' } } },
+          401: commonResponses[401],
           403: { type: 'object', properties: { success: { type: 'boolean' }, error: { type: 'string' } } },
           500: { type: 'object', properties: { success: { type: 'boolean' }, error: { type: 'string' } } },
         },
@@ -169,6 +147,10 @@ export async function studentsRoutes(fastify: FastifyInstance) {
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const user = request.user as JWTUser;
+        if (!user.organization_id) {
+          return reply.code(400).send({ error: 'Organization ID is required' });
+        }
+        
         const query = request.query as any;
         
         // Parse pagination
@@ -184,29 +166,15 @@ export async function studentsRoutes(fastify: FastifyInstance) {
         const basicFilters: any = {
           ...pagination,
         };
-        if (query.student_id) basicFilters.student_id = query.student_id;
+        if (query.bus_id) basicFilters.bus_id = query.bus_id;
+        if (query.route_id) basicFilters.route_id = query.route_id;
         if (query.class_grade) basicFilters.class_grade = query.class_grade;
         if (query.is_active !== undefined) basicFilters.is_active = query.is_active === 'true' || query.is_active === true;
-
+        
         // Check permissions in descending order of authority
-        if (hasPermission(user, PERMISSIONS.STUDENT.GET_ALL) || user.role === 'admin') {
-          // Admin role: use micro functions based on query params
-          let result;
-          
-          if (query.parent_id) {
-            // Use micro function: getByParentId
-            result = await studentService.getByParentId(query.parent_id, user.organization_id!, pagination);
-          } else if (query.route_id) {
-            // Use micro function: getByRouteId
-            result = await studentService.getByRouteId(query.route_id, user.organization_id!, pagination);
-          } else if (query.bus_id) {
-            // Use micro function: getByBusId (uses routes internally)
-            result = await studentService.getByBusId(query.bus_id, user.organization_id!, pagination);
-          } else {
-            // Use basic getAll
-            result = await studentService.getAll(user.organization_id!, basicFilters);
-          }
-          
+        if (hasPermission(user, PERMISSIONS.STUDENT.GET_ALL)) {
+          // Highest level: return full dataset with pagination
+          const result = await studentService.getAll(user.organization_id!, basicFilters);
           const paginationMeta = getPaginationMeta(result.total, pagination.limit, pagination.offset);
           logger.info({ 
             message: 'Students retrieved', 
@@ -219,56 +187,11 @@ export async function studentsRoutes(fastify: FastifyInstance) {
         }
         
         if (hasPermission(user, PERMISSIONS.STUDENT.GET)) {
-          // Restricted: return filtered dataset based on role
+          // Restricted: return filtered dataset (e.g., only own children for parents)
           if (user.role === 'parent') {
-            // Parent: only their own children - use micro function
-            const result = await studentService.getByParentId(user.id, user.organization_id!, pagination);
-            const paginationMeta = getPaginationMeta(result.total, pagination.limit, pagination.offset);
-            logger.info({ 
-              message: 'Students retrieved for parent', 
-              userId: user.id, 
-              count: result.data.length 
-            });
-            return sendSuccess(reply, result.data, 'Students retrieved successfully', paginationMeta);
-          } else if (user.role === 'driver') {
-            // Driver: students assigned to their bus/route
-            // Step 1: Get buses for driver
-            const busesResult = await busService.getByDriverId(user.id, user.organization_id!);
-            
-            if (busesResult.data.length === 0) {
-              logger.info({ message: 'No buses assigned to driver', userId: user.id });
-              return sendSuccess(reply, [], 'No students found', getPaginationMeta(0, pagination.limit, pagination.offset));
-            }
-            
-            // Step 2: Get students from all buses (uses routes internally)
-            const allStudents: any[] = [];
-            for (const bus of busesResult.data) {
-              const busStudentsResult = await studentService.getByBusId(bus.id, user.organization_id!);
-              allStudents.push(...busStudentsResult.data);
-            }
-            
-            // Remove duplicates
-            const uniqueStudents = Array.from(
-              new Map(allStudents.map(s => [s.id, s])).values()
-            );
-
-            // Apply pagination manually
-            let paginatedStudents = uniqueStudents;
-            let total = uniqueStudents.length;
-            if (pagination.offset !== undefined || pagination.limit !== undefined) {
-              const start = pagination.offset || 0;
-              const end = pagination.limit ? start + pagination.limit : undefined;
-              paginatedStudents = uniqueStudents.slice(start, end);
-            }
-            const paginationMeta = getPaginationMeta(total, pagination.limit, pagination.offset);
-            
-            logger.info({ 
-              message: 'Students retrieved for driver', 
-              userId: user.id, 
-              count: paginatedStudents.length,
-              total 
-            });
-            return sendSuccess(reply, paginatedStudents, 'Students retrieved successfully', paginationMeta);
+            // For parents, get their children (no pagination needed as it's typically small)
+            const students = await studentService.getByParentId(user.id, user.organization_id!);
+            return reply.send(students);
           }
           // For other roles with GET permission, return empty
           return sendSuccess(reply, [], 'No students found', getPaginationMeta(0, pagination.limit, pagination.offset));
@@ -283,7 +206,7 @@ export async function studentsRoutes(fastify: FastifyInstance) {
           stack: error.stack,
           userId: (request.user as JWTUser)?.id 
         });
-        return sendError(reply, 500, 'Internal server error', error.message);
+        sendErrorResponse(reply, error);
       }
     }
   );
@@ -294,43 +217,34 @@ export async function studentsRoutes(fastify: FastifyInstance) {
     {
       preHandler: [authenticate],
       schema: {
-        description: 'Get student by ID',
+        description: 'Get a specific student by ID. Parents can only access their own children.',
         tags: ['Students'],
         security: [{ bearerAuth: [] }],
-        params: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', format: 'uuid' },
-          },
-        },
+        summary: 'Get student by ID',
+        params: commonSchemas.UUIDParam,
         response: {
           200: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              organization_id: { type: 'string' },
-              name: { type: 'string' },
-              class_grade: { type: 'string' },
-              section: { type: 'string' },
-              parent_id: { type: 'string' },
-              parent_contact: { type: 'string' },
-              pickup_point_id: { type: 'string' },
-              assigned_bus_id: { type: 'string' },
-              assigned_route_id: { type: 'string' },
-              is_active: { type: 'boolean' },
-              created_at: { type: 'string', format: 'date-time' },
-              updated_at: { type: 'string', format: 'date-time' },
+            description: 'Student details',
+            content: {
+              'application/json': {
+                schema: studentSchemas.Student,
+              },
             },
           },
-          403: { type: 'object', properties: { error: { type: 'string' } } },
-          404: { type: 'object', properties: { error: { type: 'string' } } },
-          500: { type: 'object', properties: { error: { type: 'string' } } },
+          400: commonResponses[400],
+          401: commonResponses[401],
+          403: commonResponses[403],
+          404: commonResponses[404],
+          500: commonResponses[500],
         },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const user = request.user as JWTUser;
+        if (!user.organization_id) {
+          return reply.code(400).send({ error: 'Organization ID is required' });
+        }
         const params = request.params as { id: string };
         // Check permissions in descending order of authority
         if (hasPermission(user, PERMISSIONS.STUDENT.GET_ALL)) {
@@ -340,30 +254,12 @@ export async function studentsRoutes(fastify: FastifyInstance) {
         }
         
         if (hasPermission(user, PERMISSIONS.STUDENT.GET)) {
-          // Restricted: can only get students related to the user
+          // Restricted: can only get own children (for parents)
           if (user.role === 'parent') {
             const students = await studentService.getByParentId(user.id, user.organization_id!);
             const student = students.find(s => s.id === params.id);
             if (!student) {
               return reply.code(403).send({ error: 'Forbidden: Can only access own children' });
-            }
-            return reply.send(student);
-          } else if (user.role === 'driver') {
-            // Driver: can only get students assigned to their bus
-            const buses = await busService.getByDriverId(user.id, user.organization_id!);
-            if (buses.length === 0) {
-              return reply.code(403).send({ error: 'Forbidden: No bus assigned' });
-            }
-            
-            const allStudents: any[] = [];
-            for (const bus of buses) {
-              const busStudents = await studentService.getByBusId(bus.id, user.organization_id!);
-              allStudents.push(...busStudents);
-            }
-            
-            const student = allStudents.find(s => s.id === params.id);
-            if (!student) {
-              return reply.code(403).send({ error: 'Forbidden: Can only access students in assigned bus' });
             }
             return reply.send(student);
           }
@@ -372,7 +268,7 @@ export async function studentsRoutes(fastify: FastifyInstance) {
         
         return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
       } catch (error: any) {
-        reply.code(error.message.includes('not found') ? 404 : 500).send({ error: error.message });
+        sendErrorResponse(reply, error);
       }
     }
   );
@@ -383,57 +279,35 @@ export async function studentsRoutes(fastify: FastifyInstance) {
     {
       preHandler: [authenticate],
       schema: {
-        description: 'Update student',
+        description: 'Update student information. parent_id is required. Parents can only update their own children.',
         tags: ['Students'],
         security: [{ bearerAuth: [] }],
-        params: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', format: 'uuid' },
-          },
-        },
-        body: {
-          type: 'object',
-          properties: {
-            name: { type: 'string' },
-            class_grade: { type: 'string' },
-            section: { type: 'string' },
-            parent_id: { type: 'string', format: 'uuid' },
-            parent_contact: { type: 'string' },
-            pickup_point_id: { type: 'string', format: 'uuid' },
-            assigned_bus_id: { type: 'string', format: 'uuid' },
-            assigned_route_id: { type: 'string', format: 'uuid' },
-            is_active: { type: 'boolean' },
-          },
-        },
+        summary: 'Update student',
+        params: commonSchemas.UUIDParam,
+        body: studentSchemas.UpdateStudentRequest,
         response: {
           200: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              organization_id: { type: 'string' },
-              name: { type: 'string' },
-              class_grade: { type: 'string' },
-              section: { type: 'string' },
-              parent_id: { type: 'string' },
-              parent_contact: { type: 'string' },
-              pickup_point_id: { type: 'string' },
-              assigned_bus_id: { type: 'string' },
-              assigned_route_id: { type: 'string' },
-              is_active: { type: 'boolean' },
-              created_at: { type: 'string', format: 'date-time' },
-              updated_at: { type: 'string', format: 'date-time' },
+            description: 'Student updated successfully',
+            content: {
+              'application/json': {
+                schema: studentSchemas.Student,
+              },
             },
           },
-          400: { type: 'object', properties: { error: { type: 'string' } } },
-          403: { type: 'object', properties: { error: { type: 'string' } } },
-          404: { type: 'object', properties: { error: { type: 'string' } } },
+          400: commonResponses[400],
+          401: commonResponses[401],
+          403: commonResponses[403],
+          404: commonResponses[404],
+          500: commonResponses[500],
         },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const user = request.user as JWTUser;
+        if (!user.organization_id) {
+          return reply.code(400).send({ error: 'Organization ID is required' });
+        }
         const params = request.params as { id: string };
         if (!hasPermission(user, PERMISSIONS.STUDENT.UPDATE)) {
           return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
@@ -448,7 +322,8 @@ export async function studentsRoutes(fastify: FastifyInstance) {
           }
         }
 
-        const data = updateStudentSchema.parse(request.body);
+        const bodyData = extractRequestBodyData(request.body);
+        const data = updateStudentSchema.parse(bodyData);
         const updated = await studentService.update(
           params.id,
           data,
@@ -456,8 +331,7 @@ export async function studentsRoutes(fastify: FastifyInstance) {
         );
         reply.send(updated);
       } catch (error: any) {
-        const statusCode = error.message.includes('not found') ? 404 : 400;
-        reply.code(statusCode).send({ error: error.message });
+        sendErrorResponse(reply, error);
       }
     }
   );
@@ -468,40 +342,50 @@ export async function studentsRoutes(fastify: FastifyInstance) {
     {
       preHandler: [authenticate],
       schema: {
-        description: 'Delete student',
+        description: 'Delete a student. Requires student:delete permission.',
         tags: ['Students'],
         security: [{ bearerAuth: [] }],
-        params: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', format: 'uuid' },
-          },
-        },
+        summary: 'Delete student',
+        params: commonSchemas.UUIDParam,
         response: {
           200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
+            description: 'Student deleted successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    message: { type: 'string' },
+                  },
+                  required: ['success', 'message'],
+                },
+              },
             },
           },
-          403: { type: 'object', properties: { error: { type: 'string' } } },
-          404: { type: 'object', properties: { error: { type: 'string' } } },
-          500: { type: 'object', properties: { error: { type: 'string' } } },
+          400: commonResponses[400],
+          401: commonResponses[401],
+          403: commonResponses[403],
+          404: commonResponses[404],
+          500: commonResponses[500],
         },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const user = request.user as JWTUser;
+        if (!user.organization_id) {
+          return reply.code(400).send({ error: 'Organization ID is required' });
+        }
         const params = request.params as { id: string };
         if (!hasPermission(user, PERMISSIONS.STUDENT.DELETE)) {
           return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
         }
 
         await studentService.delete(params.id, user.organization_id!);
-        reply.send({ message: 'Student deleted successfully' });
+        reply.send({ success: true, message: 'Student deleted successfully' });
       } catch (error: any) {
-        reply.code(error.message.includes('not found') ? 404 : 500).send({ error: error.message });
+        sendErrorResponse(reply, error);
       }
     }
   );
@@ -512,49 +396,59 @@ export async function studentsRoutes(fastify: FastifyInstance) {
     {
       preHandler: [authenticate],
       schema: {
-        description: 'Get student pickup location',
+        description: 'Get student pickup location details including coordinates and address. Parents can only access their own children\'s pickup locations.',
         tags: ['Students'],
         security: [{ bearerAuth: [] }],
-        params: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', format: 'uuid' },
-          },
-        },
+        summary: 'Get student pickup location',
+        params: commonSchemas.UUIDParam,
         response: {
           200: {
-            type: 'object',
-            properties: {
-              student: {
-                type: 'object',
-                properties: {
-                  id: { type: 'string' },
-                  name: { type: 'string' },
-                  pickup_point_id: { type: 'string' },
-                },
-              },
-              pickup_location: {
-                type: 'object',
-                nullable: true,
-                properties: {
-                  id: { type: 'string' },
-                  name: { type: 'string' },
-                  latitude: { type: 'number' },
-                  longitude: { type: 'number' },
-                  address: { type: 'object' },
+            description: 'Student pickup location details',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    student: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        name: { type: 'string' },
+                        pickup_point_id: { type: 'string', format: 'uuid', nullable: true },
+                      },
+                      required: ['id', 'name'],
+                    },
+                    pickup_location: {
+                      type: 'object',
+                      nullable: true,
+                      properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        name: { type: 'string' },
+                        latitude: { type: 'number' },
+                        longitude: { type: 'number' },
+                        address: { type: 'object', additionalProperties: true },
+                      },
+                    },
+                  },
+                  required: ['student'],
                 },
               },
             },
           },
-          403: { type: 'object', properties: { error: { type: 'string' } } },
-          404: { type: 'object', properties: { error: { type: 'string' } } },
-          500: { type: 'object', properties: { error: { type: 'string' } } },
+          400: commonResponses[400],
+          401: commonResponses[401],
+          403: commonResponses[403],
+          404: commonResponses[404],
+          500: commonResponses[500],
         },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const user = request.user as JWTUser;
+        if (!user.organization_id) {
+          return reply.code(400).send({ error: 'Organization ID is required' });
+        }
         const params = request.params as { id: string };
         // Check permissions in descending order of authority
         if (hasPermission(user, PERMISSIONS.STUDENT.GET_ALL)) {
@@ -585,7 +479,7 @@ export async function studentsRoutes(fastify: FastifyInstance) {
         
         return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
       } catch (error: any) {
-        reply.code(error.message.includes('not found') ? 404 : 500).send({ error: error.message });
+        sendErrorResponse(reply, error);
       }
     }
   );

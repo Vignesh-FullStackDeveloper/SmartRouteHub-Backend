@@ -9,6 +9,7 @@ import { PERMISSIONS } from '../rbac/permissions';
 import { JWTUser } from '../types';
 import { sendSuccess, sendError, parsePagination, getPaginationMeta } from '../utils/response.util';
 import { logger } from '../config/logger';
+import { extractRequestBodyData } from '../utils/request.util';
 
 // Helper function to normalize time format (HH:MM:SS or HH:MM -> HH:MM)
 const normalizeTime = (time: string): string => {
@@ -177,7 +178,8 @@ export async function routesRoutes(fastify: FastifyInstance) {
           return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
         }
 
-        const data = createRouteSchema.parse(request.body);
+        const bodyData = extractRequestBodyData(request.body);
+        const data = createRouteSchema.parse(bodyData);
         const route = await routeService.create(data, user.organization_id);
         reply.code(201).send(route);
       } catch (error: any) {
@@ -575,7 +577,8 @@ export async function routesRoutes(fastify: FastifyInstance) {
           return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
         }
 
-        const data = updateRouteSchema.parse(request.body);
+        const bodyData = extractRequestBodyData(request.body);
+        const data = updateRouteSchema.parse(bodyData);
         const route = await routeService.update(
           (request.params as any).id,
           data,

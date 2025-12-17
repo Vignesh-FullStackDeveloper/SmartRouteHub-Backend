@@ -124,6 +124,10 @@ Click the "Authorize" button above and enter: \`Bearer <your-token>\`
             bearerFormat: 'JWT',
           },
         },
+        schemas: {
+          // Common schemas will be auto-registered from route files
+          // This is a placeholder - schemas are defined in route files
+        },
       },
       tags: [
         { name: 'Authentication', description: 'Authentication endpoints' },
@@ -140,6 +144,8 @@ Click the "Authorize" button above and enter: \`Bearer <your-token>\`
         { name: 'Maps', description: 'Google Maps integration' },
         { name: 'SuperAdmin', description: 'Superadmin operations' },
         { name: 'Notifications', description: 'Real-time notifications' },
+        { name: 'Roles', description: 'Role and permission management' },
+        { name: 'Permissions', description: 'Permission management' },
       ],
     },
   });
