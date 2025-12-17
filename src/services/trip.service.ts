@@ -186,5 +186,76 @@ export class TripService {
     }
     return trip;
   }
+
+  async getAll(organizationId: string, filters?: {
+    status?: string;
+    bus_id?: string;
+    driver_id?: string;
+    start_date?: string;
+    end_date?: string;
+  }): Promise<any[]> {
+    let query = db('trips')
+      .where({ 'trips.organization_id': organizationId })
+      .leftJoin('buses', 'trips.bus_id', 'buses.id')
+      .leftJoin('routes', 'trips.route_id', 'routes.id')
+      .leftJoin('users', 'trips.driver_id', 'users.id')
+      .select(
+        'trips.*',
+        'buses.bus_number',
+        'routes.name as route_name',
+        'users.name as driver_name'
+      )
+      .orderBy('trips.start_time', 'desc');
+
+    if (filters?.status) {
+      query = query.where('trips.status', filters.status);
+    }
+
+    if (filters?.bus_id) {
+      query = query.where('trips.bus_id', filters.bus_id);
+    }
+
+    if (filters?.driver_id) {
+      query = query.where('trips.driver_id', filters.driver_id);
+    }
+
+    if (filters?.start_date) {
+      query = query.where('trips.start_time', '>=', filters.start_date);
+    }
+
+    if (filters?.end_date) {
+      query = query.where('trips.start_time', '<=', filters.end_date);
+    }
+
+    return query;
+  }
+
+  async delete(tripId: string, organizationId: string): Promise<void> {
+    const trip = await this.repository.findById(tripId, organizationId);
+    if (!trip) {
+      throw new Error('Trip not found');
+    }
+
+    // Only allow deletion of completed trips
+    if (trip.status === 'in_progress') {
+      throw new Error('Cannot delete trip that is in progress. Please end the trip first.');
+    }
+
+    // Delete location tracking records first
+    await db('location_tracking')
+      .where({ trip_id: tripId })
+      .delete();
+
+    // Delete the trip
+    const deleted = await this.repository.delete(tripId, organizationId);
+    if (!deleted) {
+      throw new Error('Failed to delete trip');
+    }
+
+    logger.info({
+      message: 'Trip deleted',
+      tripId,
+    });
+  }
 }
 

@@ -225,6 +225,23 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
         description: 'Update organization',
         tags: ['Organizations'],
         security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+        body: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            code: { type: 'string' },
+            primary_color: { type: 'string', pattern: '^#[0-9A-F]{6}$' },
+            contact_email: { type: 'string', format: 'email' },
+            contact_phone: { type: 'string' },
+            address: { type: 'string' },
+          },
+        },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -244,6 +261,9 @@ export async function organizationsRoutes(fastify: FastifyInstance) {
         const updated = await organizationService.update(params.id, data);
         reply.send(updated);
       } catch (error: any) {
+        if (error.name === 'ZodError') {
+          return reply.code(400).send({ error: 'Validation error', details: error.errors });
+        }
         const statusCode = error.message.includes('not found') ? 404 :
                           error.message.includes('already exists') ? 409 : 400;
         reply.code(statusCode).send({ error: error.message });

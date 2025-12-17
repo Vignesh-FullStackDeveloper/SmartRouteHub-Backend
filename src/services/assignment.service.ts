@@ -136,5 +136,49 @@ export class AssignmentService {
       count: studentsWithRoute.length,
     };
   }
+
+  async unassignStudentsFromRoute(
+    studentIds: string[],
+    routeId: string,
+    organizationId: string
+  ): Promise<{ count: number }> {
+    // Verify route exists
+    const route = await this.routeRepository.findById(routeId, organizationId);
+    if (!route) {
+      throw new Error('Route not found');
+    }
+
+    const count = await this.studentRepository.unassignFromRoute(studentIds, routeId, organizationId);
+
+    logger.info({
+      message: 'Students unassigned from route',
+      routeId,
+      studentCount: count,
+    });
+
+    return { count };
+  }
+
+  async unassignStudentsFromBus(
+    studentIds: string[],
+    busId: string,
+    organizationId: string
+  ): Promise<{ count: number }> {
+    // Verify bus exists
+    const bus = await this.busRepository.findById(busId, organizationId);
+    if (!bus) {
+      throw new Error('Bus not found');
+    }
+
+    const count = await this.studentRepository.unassignFromBus(studentIds, busId, organizationId);
+
+    logger.info({
+      message: 'Students unassigned from bus',
+      busId,
+      studentCount: count,
+    });
+
+    return { count };
+  }
 }
 

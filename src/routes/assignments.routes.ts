@@ -29,11 +29,40 @@ export async function assignmentsRoutes(fastify: FastifyInstance) {
         description: 'Assign students to a route',
         tags: ['Assignments'],
         security: [{ bearerAuth: [] }],
+        body: {
+          type: 'object',
+          required: ['student_ids', 'route_id'],
+          properties: {
+            student_ids: {
+              type: 'array',
+              items: { type: 'string', format: 'uuid' },
+            },
+            route_id: { type: 'string', format: 'uuid' },
+            bus_id: { type: 'string', format: 'uuid' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              message: { type: 'string' },
+              route_id: { type: 'string' },
+              bus_id: { type: 'string' },
+              student_count: { type: 'integer' },
+            },
+          },
+          400: { type: 'object', properties: { error: { type: 'string' } } },
+          403: { type: 'object', properties: { error: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' } } },
+        },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const user = request.user as JWTUser;
+        if (!user.organization_id) {
+          return reply.code(400).send({ error: 'Organization ID is required' });
+        }
         if (!hasPermission(user, PERMISSIONS.ROUTE.UPDATE)) {
           return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
         }
@@ -43,7 +72,7 @@ export async function assignmentsRoutes(fastify: FastifyInstance) {
           data.student_ids,
           data.route_id,
           data.bus_id,
-          user.organization_id!
+          user.organization_id
         );
         reply.send({
           message: 'Students assigned successfully',
@@ -73,6 +102,9 @@ export async function assignmentsRoutes(fastify: FastifyInstance) {
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const user = request.user as JWTUser;
+        if (!user.organization_id) {
+          return reply.code(400).send({ error: 'Organization ID is required' });
+        }
         if (!hasPermission(user, PERMISSIONS.BUS.UPDATE)) {
           return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
         }
@@ -81,7 +113,7 @@ export async function assignmentsRoutes(fastify: FastifyInstance) {
         const result = await assignmentService.assignStudentsToBus(
           data.student_ids,
           data.bus_id,
-          user.organization_id!
+          user.organization_id
         );
         reply.send({
           message: 'Students assigned successfully',
@@ -89,6 +121,9 @@ export async function assignmentsRoutes(fastify: FastifyInstance) {
           student_count: result.count,
         });
       } catch (error: any) {
+        if (error.name === 'ZodError') {
+          return reply.code(400).send({ error: 'Validation error', details: error.errors });
+        }
         const statusCode = error.message.includes('not found') ? 404 :
                           error.message.includes('capacity') ? 400 : 400;
         reply.code(statusCode).send({ error: error.message });
@@ -110,6 +145,9 @@ export async function assignmentsRoutes(fastify: FastifyInstance) {
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const user = request.user as JWTUser;
+        if (!user.organization_id) {
+          return reply.code(400).send({ error: 'Organization ID is required' });
+        }
         if (!hasPermission(user, PERMISSIONS.ROUTE.GET)) {
           return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
         }
@@ -117,7 +155,7 @@ export async function assignmentsRoutes(fastify: FastifyInstance) {
         const params = request.params as { id: string };
         const result = await assignmentService.getRouteAssignments(
           params.id,
-          user.organization_id!
+          user.organization_id
         );
         reply.send(result);
       } catch (error: any) {
@@ -140,6 +178,9 @@ export async function assignmentsRoutes(fastify: FastifyInstance) {
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const user = request.user as JWTUser;
+        if (!user.organization_id) {
+          return reply.code(400).send({ error: 'Organization ID is required' });
+        }
         if (!hasPermission(user, PERMISSIONS.BUS.GET)) {
           return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
         }
@@ -147,10 +188,132 @@ export async function assignmentsRoutes(fastify: FastifyInstance) {
         const params = request.params as { id: string };
         const result = await assignmentService.getBusAssignments(
           params.id,
-          user.organization_id!
+          user.organization_id
         );
         reply.send(result);
       } catch (error: any) {
+        reply.code(error.message.includes('not found') ? 404 : 500).send({ error: error.message });
+      }
+    }
+  );
+
+  // Unassign students from route
+  fastify.post(
+    '/route/:id/unassign-students',
+    {
+      preHandler: [authenticate],
+      schema: {
+        description: 'Unassign students from a route',
+        tags: ['Assignments'],
+        security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+        body: {
+          type: 'object',
+          required: ['student_ids'],
+          properties: {
+            student_ids: {
+              type: 'array',
+              items: { type: 'string', format: 'uuid' },
+            },
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const user = request.user as JWTUser;
+        if (!user.organization_id) {
+          return reply.code(400).send({ error: 'Organization ID is required' });
+        }
+        if (!hasPermission(user, PERMISSIONS.ROUTE.UPDATE)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
+        const params = request.params as { id: string };
+        const unassignSchema = z.object({
+          student_ids: z.array(z.string().uuid()),
+        });
+        const body = unassignSchema.parse(request.body);
+        const result = await assignmentService.unassignStudentsFromRoute(
+          body.student_ids,
+          params.id,
+          user.organization_id
+        );
+        reply.send({
+          message: 'Students unassigned successfully',
+          route_id: params.id,
+          student_count: result.count,
+        });
+      } catch (error: any) {
+        if (error.name === 'ZodError') {
+          return reply.code(400).send({ error: 'Validation error', details: error.errors });
+        }
+        reply.code(error.message.includes('not found') ? 404 : 500).send({ error: error.message });
+      }
+    }
+  );
+
+  // Unassign students from bus
+  fastify.post(
+    '/bus/:id/unassign-students',
+    {
+      preHandler: [authenticate],
+      schema: {
+        description: 'Unassign students from a bus',
+        tags: ['Assignments'],
+        security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+        body: {
+          type: 'object',
+          required: ['student_ids'],
+          properties: {
+            student_ids: {
+              type: 'array',
+              items: { type: 'string', format: 'uuid' },
+            },
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const user = request.user as JWTUser;
+        if (!user.organization_id) {
+          return reply.code(400).send({ error: 'Organization ID is required' });
+        }
+        if (!hasPermission(user, PERMISSIONS.BUS.UPDATE)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
+        const params = request.params as { id: string };
+        const unassignSchema = z.object({
+          student_ids: z.array(z.string().uuid()),
+        });
+        const body = unassignSchema.parse(request.body);
+        const result = await assignmentService.unassignStudentsFromBus(
+          body.student_ids,
+          params.id,
+          user.organization_id
+        );
+        reply.send({
+          message: 'Students unassigned successfully',
+          bus_id: params.id,
+          student_count: result.count,
+        });
+      } catch (error: any) {
+        if (error.name === 'ZodError') {
+          return reply.code(400).send({ error: 'Validation error', details: error.errors });
+        }
         reply.code(error.message.includes('not found') ? 404 : 500).send({ error: error.message });
       }
     }

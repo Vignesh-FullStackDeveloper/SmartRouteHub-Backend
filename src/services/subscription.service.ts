@@ -107,5 +107,22 @@ export class SubscriptionService {
   async getExpiring(organizationId: string, days: number = 30): Promise<Subscription[]> {
     return this.repository.findExpiring(organizationId, days);
   }
+
+  async delete(id: string, organizationId: string): Promise<void> {
+    const subscription = await this.repository.findById(id, organizationId);
+    if (!subscription) {
+      throw new Error('Subscription not found');
+    }
+
+    const deleted = await this.repository.delete(id, organizationId);
+    if (!deleted) {
+      throw new Error('Failed to delete subscription');
+    }
+
+    logger.info({
+      message: 'Subscription deleted',
+      subscriptionId: id,
+    });
+  }
 }
 

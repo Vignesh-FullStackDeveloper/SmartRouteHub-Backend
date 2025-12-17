@@ -36,19 +36,55 @@ export async function driversRoutes(fastify: FastifyInstance) {
         description: 'Create a new driver',
         tags: ['Drivers'],
         security: [{ bearerAuth: [] }],
+        body: {
+          type: 'object',
+          required: ['name', 'email', 'password', 'driver_id'],
+          properties: {
+            name: { type: 'string' },
+            email: { type: 'string', format: 'email' },
+            phone: { type: 'string' },
+            password: { type: 'string', minLength: 6 },
+            driver_id: { type: 'string' },
+          },
+        },
+        response: {
+          201: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              name: { type: 'string' },
+              email: { type: 'string' },
+              phone: { type: 'string' },
+              driver_id: { type: 'string' },
+              organization_id: { type: 'string' },
+              is_active: { type: 'boolean' },
+              created_at: { type: 'string', format: 'date-time' },
+              updated_at: { type: 'string', format: 'date-time' },
+            },
+          },
+          400: { type: 'object', properties: { error: { type: 'string' } } },
+          403: { type: 'object', properties: { error: { type: 'string' } } },
+          409: { type: 'object', properties: { error: { type: 'string' } } },
+        },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const user = request.user as JWTUser;
+        if (!user.organization_id) {
+          return reply.code(400).send({ error: 'Organization ID is required' });
+        }
         if (!hasPermission(user, PERMISSIONS.USER.CREATE)) {
           return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
         }
 
         const data = createDriverSchema.parse(request.body);
-        const driver = await driverService.create(data, user.organization_id!);
+        const driver = await driverService.create(data, user.organization_id);
         reply.code(201).send(driver);
       } catch (error: any) {
+        if (error.name === 'ZodError') {
+          return reply.code(400).send({ error: 'Validation error', details: error.errors });
+        }
         const statusCode = error.message.includes('already exists') ? 409 : 400;
         reply.code(statusCode).send({ error: error.message });
       }
@@ -148,6 +184,44 @@ export async function driversRoutes(fastify: FastifyInstance) {
         description: 'Update driver',
         tags: ['Drivers'],
         security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+        body: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            email: { type: 'string', format: 'email' },
+            phone: { type: 'string' },
+            driver_id: { type: 'string' },
+            is_active: { type: 'boolean' },
+            assigned_bus_id: { type: 'string', format: 'uuid' },
+            assigned_route_id: { type: 'string', format: 'uuid' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              name: { type: 'string' },
+              email: { type: 'string' },
+              phone: { type: 'string' },
+              driver_id: { type: 'string' },
+              organization_id: { type: 'string' },
+              is_active: { type: 'boolean' },
+              created_at: { type: 'string', format: 'date-time' },
+              updated_at: { type: 'string', format: 'date-time' },
+            },
+          },
+          400: { type: 'object', properties: { error: { type: 'string' } } },
+          403: { type: 'object', properties: { error: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' } } },
+          409: { type: 'object', properties: { error: { type: 'string' } } },
+        },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -219,6 +293,35 @@ export async function driversRoutes(fastify: FastifyInstance) {
         return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
       } catch (error: any) {
         reply.code(error.message.includes('not found') ? 404 : 500).send({ error: error.message });
+      }
+    }
+  );
+
+  // Delete driver
+  fastify.delete(
+    '/:id',
+    {
+      preHandler: [authenticate],
+      schema: {
+        description: 'Delete driver',
+        tags: ['Drivers'],
+        security: [{ bearerAuth: [] }],
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const user = request.user as JWTUser;
+        if (!hasPermission(user, PERMISSIONS.USER.DELETE)) {
+          return reply.code(403).send({ error: 'Forbidden: Insufficient permissions' });
+        }
+
+        const params = request.params as { id: string };
+        await driverService.delete(params.id, user.organization_id!);
+        reply.send({ message: 'Driver deleted successfully' });
+      } catch (error: any) {
+        const statusCode = error.message.includes('not found') ? 404 :
+                          error.message.includes('assigned to') ? 400 : 500;
+        reply.code(statusCode).send({ error: error.message });
       }
     }
   );

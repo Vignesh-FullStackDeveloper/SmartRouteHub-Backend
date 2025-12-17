@@ -44,6 +44,20 @@ export class StudentRepository extends BaseRepository<Student> {
       .update({ assigned_route_id: routeId });
   }
 
+  async unassignFromRoute(studentIds: string[], routeId: string, organizationId: string): Promise<number> {
+    return this.db('students')
+      .whereIn('id', studentIds)
+      .where({ organization_id: organizationId, assigned_route_id: routeId })
+      .update({ assigned_route_id: null });
+  }
+
+  async unassignFromBus(studentIds: string[], busId: string, organizationId: string): Promise<number> {
+    return this.db('students')
+      .whereIn('id', studentIds)
+      .where({ organization_id: organizationId, assigned_bus_id: busId })
+      .update({ assigned_bus_id: null });
+  }
+
   async getWithPickupLocation(studentId: string, organizationId: string): Promise<any> {
     const student = await this.findById(studentId, organizationId);
     if (!student || !student.pickup_point_id) {

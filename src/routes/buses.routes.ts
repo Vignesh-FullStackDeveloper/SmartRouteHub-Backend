@@ -12,6 +12,7 @@ const createBusSchema = z.object({
   driver_id: z.string().uuid().optional(),
   assigned_route_id: z.string().uuid().optional(),
   metadata: z.record(z.any()).optional(),
+  is_active: z.boolean().optional(),
 });
 
 const updateBusSchema = createBusSchema.partial();
@@ -28,6 +29,38 @@ export async function busesRoutes(fastify: FastifyInstance) {
         description: 'Create a new bus',
         tags: ['Buses'],
         security: [{ bearerAuth: [] }],
+        body: {
+          type: 'object',
+          required: ['bus_number', 'capacity'],
+          properties: {
+            bus_number: { type: 'string' },
+            capacity: { type: 'integer', minimum: 1 },
+            driver_id: { type: 'string', format: 'uuid' },
+            assigned_route_id: { type: 'string', format: 'uuid' },
+            metadata: { type: 'object' },
+            is_active: { type: 'boolean', description: 'Optional: Defaults to true if not provided' },
+          },
+        },
+        response: {
+          201: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              organization_id: { type: 'string' },
+              bus_number: { type: 'string' },
+              capacity: { type: 'integer' },
+              driver_id: { type: 'string' },
+              assigned_route_id: { type: 'string' },
+              is_active: { type: 'boolean' },
+              metadata: { type: 'object' },
+              created_at: { type: 'string', format: 'date-time' },
+              updated_at: { type: 'string', format: 'date-time' },
+            },
+          },
+          400: { type: 'object', properties: { error: { type: 'string' } } },
+          403: { type: 'object', properties: { error: { type: 'string' } } },
+          409: { type: 'object', properties: { error: { type: 'string' } } },
+        },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -61,6 +94,28 @@ export async function busesRoutes(fastify: FastifyInstance) {
             is_active: { type: 'boolean' },
             driver_id: { type: 'string' },
           },
+        },
+        response: {
+          200: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                organization_id: { type: 'string' },
+                bus_number: { type: 'string' },
+                capacity: { type: 'integer' },
+                driver_id: { type: 'string' },
+                assigned_route_id: { type: 'string' },
+                is_active: { type: 'boolean' },
+                metadata: { type: 'object' },
+                created_at: { type: 'string', format: 'date-time' },
+                updated_at: { type: 'string', format: 'date-time' },
+              },
+            },
+          },
+          403: { type: 'object', properties: { error: { type: 'string' } } },
+          500: { type: 'object', properties: { error: { type: 'string' } } },
         },
       },
     },
@@ -102,6 +157,32 @@ export async function busesRoutes(fastify: FastifyInstance) {
         description: 'Get bus by ID',
         tags: ['Buses'],
         security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              organization_id: { type: 'string' },
+              bus_number: { type: 'string' },
+              capacity: { type: 'integer' },
+              driver_id: { type: 'string' },
+              assigned_route_id: { type: 'string' },
+              is_active: { type: 'boolean' },
+              metadata: { type: 'object' },
+              created_at: { type: 'string', format: 'date-time' },
+              updated_at: { type: 'string', format: 'date-time' },
+            },
+          },
+          403: { type: 'object', properties: { error: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' } } },
+          500: { type: 'object', properties: { error: { type: 'string' } } },
+        },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -146,6 +227,44 @@ export async function busesRoutes(fastify: FastifyInstance) {
         description: 'Update bus',
         tags: ['Buses'],
         security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+        body: {
+          type: 'object',
+          properties: {
+            bus_number: { type: 'string' },
+            capacity: { type: 'integer', minimum: 1 },
+            driver_id: { type: 'string', format: 'uuid' },
+            assigned_route_id: { type: 'string', format: 'uuid' },
+            metadata: { type: 'object' },
+            is_active: { type: 'boolean' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              organization_id: { type: 'string' },
+              bus_number: { type: 'string' },
+              capacity: { type: 'integer' },
+              driver_id: { type: 'string' },
+              assigned_route_id: { type: 'string' },
+              is_active: { type: 'boolean' },
+              metadata: { type: 'object' },
+              created_at: { type: 'string', format: 'date-time' },
+              updated_at: { type: 'string', format: 'date-time' },
+            },
+          },
+          400: { type: 'object', properties: { error: { type: 'string' } } },
+          403: { type: 'object', properties: { error: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' } } },
+          409: { type: 'object', properties: { error: { type: 'string' } } },
+        },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -180,6 +299,23 @@ export async function busesRoutes(fastify: FastifyInstance) {
         description: 'Delete bus',
         tags: ['Buses'],
         security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              message: { type: 'string' },
+            },
+          },
+          403: { type: 'object', properties: { error: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' } } },
+          500: { type: 'object', properties: { error: { type: 'string' } } },
+        },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -207,12 +343,38 @@ export async function busesRoutes(fastify: FastifyInstance) {
         description: 'Assign driver to bus',
         tags: ['Buses'],
         security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+          },
+        },
         body: {
           type: 'object',
           required: ['driver_id'],
           properties: {
-            driver_id: { type: 'string' },
+            driver_id: { type: 'string', format: 'uuid' },
           },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              organization_id: { type: 'string' },
+              bus_number: { type: 'string' },
+              capacity: { type: 'integer' },
+              driver_id: { type: 'string' },
+              assigned_route_id: { type: 'string' },
+              is_active: { type: 'boolean' },
+              metadata: { type: 'object' },
+              created_at: { type: 'string', format: 'date-time' },
+              updated_at: { type: 'string', format: 'date-time' },
+            },
+          },
+          403: { type: 'object', properties: { error: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' } } },
+          500: { type: 'object', properties: { error: { type: 'string' } } },
         },
       },
     },

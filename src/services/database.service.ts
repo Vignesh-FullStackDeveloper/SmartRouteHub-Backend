@@ -143,7 +143,7 @@ export class DatabaseService {
       table.string('name').notNullable();
       table.string('class_grade').notNullable();
       table.string('section').notNullable();
-      table.uuid('parent_id').notNullable().references('id').inTable('users').onDelete('CASCADE');
+      table.uuid('parent_id').nullable().references('id').inTable('users').onDelete('CASCADE');
       table.string('parent_contact').notNullable();
       table.uuid('pickup_point_id').nullable();
       table.uuid('assigned_bus_id').nullable().references('id').inTable('buses').onDelete('SET NULL');
