@@ -31,19 +31,25 @@ export async function busesRoutes(fastify: FastifyInstance) {
     {
       preHandler: [authenticate],
       schema: {
-        description: 'Create a new bus',
+        description: 'Create a new bus. Payload should be wrapped in a "data" object.',
         tags: ['Buses'],
         security: [{ bearerAuth: [] }],
         body: {
           type: 'object',
-          required: ['bus_number', 'capacity'],
+          required: ['data'],
           properties: {
-            bus_number: { type: 'string' },
-            capacity: { type: 'integer', minimum: 1 },
-            driver_id: { type: 'string', format: 'uuid' },
-            assigned_route_id: { type: 'string', format: 'uuid' },
-            metadata: { type: 'object' },
-            is_active: { type: 'boolean', description: 'Optional: Defaults to true if not provided' },
+            data: {
+              type: 'object',
+              required: ['bus_number', 'capacity'],
+              properties: {
+                bus_number: { type: 'string' },
+                capacity: { type: 'integer', minimum: 1 },
+                driver_id: { type: 'string', format: 'uuid' },
+                assigned_route_id: { type: 'string', format: 'uuid' },
+                metadata: { type: 'object' },
+                is_active: { type: 'boolean', description: 'Optional: Defaults to true if not provided' },
+              },
+            },
           },
         },
         response: {
@@ -79,6 +85,9 @@ export async function busesRoutes(fastify: FastifyInstance) {
         const bus = await busService.create(data, request.user!.organization_id!);
         reply.code(201).send(bus);
       } catch (error: any) {
+        if (error.name === 'ZodError') {
+          return reply.code(400).send({ error: 'Validation error', details: error.errors });
+        }
         const statusCode = error.message.includes('already exists') ? 409 : 400;
         reply.code(statusCode).send({ error: error.message });
       }

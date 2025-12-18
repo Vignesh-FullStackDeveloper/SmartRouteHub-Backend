@@ -9,7 +9,7 @@ export const studentSchemas = {
     properties: {
       data: {
         type: 'object',
-        required: ['name', 'class_grade', 'section', 'parent_id', 'parent_contact'],
+        required: ['name', 'class_grade', 'section', 'parent_id'],
         properties: {
           name: {
         type: 'string',
@@ -37,25 +37,25 @@ export const studentSchemas = {
           parent_contact: {
             type: 'string',
             minLength: 1,
-            description: 'Parent contact number',
+            description: 'Parent contact number (optional - will be auto-populated from parent phone/email if not provided)',
           },
           pickup_point_id: {
             type: 'string',
             format: 'uuid',
             nullable: true,
-            description: 'UUID of the pickup point/stop',
+            description: 'UUID of the pickup point/stop. If provided, assigned_route_id and assigned_bus_id will be auto-assigned from the route containing this stop.',
           },
           assigned_bus_id: {
             type: 'string',
             format: 'uuid',
             nullable: true,
-            description: 'UUID of the assigned bus',
+            description: 'UUID of the assigned bus (optional - will be auto-assigned from route if pickup_point_id is provided)',
           },
           assigned_route_id: {
             type: 'string',
             format: 'uuid',
             nullable: true,
-            description: 'UUID of the assigned route',
+            description: 'UUID of the assigned route (optional - will be auto-assigned from pickup_point_id if provided)',
           },
           is_active: {
             type: 'boolean',
@@ -95,18 +95,18 @@ export const studentSchemas = {
           parent_id: {
             type: 'string',
             format: 'uuid',
-            description: 'UUID of the parent user (required on update)',
+            description: 'UUID of the parent user (optional on update)',
           },
           parent_contact: {
             type: 'string',
             minLength: 1,
-            description: 'Parent contact number',
+            description: 'Parent contact number (optional - will be auto-populated from parent phone/email if parent_id is provided)',
           },
           pickup_point_id: {
             type: 'string',
             format: 'uuid',
             nullable: true,
-            description: 'UUID of the pickup point/stop',
+            description: 'UUID of the pickup point/stop. If provided, assigned_route_id and assigned_bus_id will be auto-assigned. Set to null to remove assignment.',
           },
           assigned_bus_id: {
             type: 'string',

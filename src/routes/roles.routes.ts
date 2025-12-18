@@ -340,7 +340,8 @@ export async function rolesRoutes(fastify: FastifyInstance) {
         }
         
         const params = request.params as { id: string };
-        await roleService.delete(organizationCode, params.id, user.role as 'superadmin' | 'admin');
+        // Pass user email to identify default superadmin (superadmin@smartroutehub.com)
+        await roleService.delete(organizationCode, params.id, user.role as 'superadmin' | 'admin', user.email);
         reply.send({ success: true, message: 'Role deleted successfully' });
       } catch (error: any) {
         sendErrorResponse(reply, error);

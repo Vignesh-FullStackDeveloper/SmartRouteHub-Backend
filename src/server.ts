@@ -80,12 +80,15 @@ async function buildServer() {
 
 ### 1. Get Authentication Token
 
-**For Superadmin (Development):**
+**For Superadmin (in Organization):**
 \`\`\`bash
 POST /api/auth/login
 {
-  "email": "superadmin@smartroutehub.com",
-  "password": "SuperAdmin@123"
+  "data": {
+    "email": "superadmin@smartroutehub.com",
+    "password": "SuperAdmin@123",
+    "organizationCode": "ORG001"
+  }
 }
 \`\`\`
 
@@ -93,9 +96,11 @@ POST /api/auth/login
 \`\`\`bash
 POST /api/auth/login
 {
-  "email": "user@example.com",
-  "password": "your-password",
-  "organizationCode": "ORG001"
+  "data": {
+    "email": "user@example.com",
+    "password": "your-password",
+    "organizationCode": "ORG001"
+  }
 }
 \`\`\`
 

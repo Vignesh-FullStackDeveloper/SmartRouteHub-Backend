@@ -412,6 +412,52 @@ export class RouteService {
    * Get routes by multiple student IDs - Micro function
    * Returns unique routes assigned to the given students
    */
+  /**
+   * Find route by stop ID (pickup point)
+   * Returns the route that contains the given stop ID
+   */
+  async findByStopId(stopId: string, organizationId: string): Promise<Route & { stops: Stop[] } | null> {
+    const organization = await this.organizationService.getById(organizationId);
+    const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
+    
+    try {
+      // Find the stop first
+      const stop = await orgDb('stops')
+        .where({ id: stopId })
+        .first();
+      
+      if (!stop) {
+        return null;
+      }
+
+      // Get the route that contains this stop
+      const route = await orgDb('routes')
+        .where({ id: stop.route_id })
+        .first();
+
+      if (!route) {
+        return null;
+      }
+
+      // Get all stops for this route
+      const stops = await orgDb('stops')
+        .where({ route_id: route.id })
+        .orderBy('order')
+        .then((results: any[]) => results.map(s => ({
+          ...s,
+          address: s.address ? (typeof s.address === 'string' ? JSON.parse(s.address) : s.address) : null,
+        })));
+
+      return {
+        ...route,
+        organization_id: organizationId,
+        stops,
+      } as Route & { stops: Stop[] };
+    } finally {
+      await orgDb.destroy();
+    }
+  }
+
   async getRoutesByStudentIds(studentIds: string[], organizationId: string, pagination?: {
     limit?: number;
     offset?: number;

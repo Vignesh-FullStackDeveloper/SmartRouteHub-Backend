@@ -9,10 +9,10 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "start:prod": "cross-env NODE_ENV=production node dist/server.js",
-    "migrate": "cross-env NODE_OPTIONS=\"-r ts-node/register\" knex migrate:latest",
+    "migrate": "node scripts/ensure-db.js && cross-env NODE_OPTIONS=\"-r ts-node/register\" knex migrate:latest",
     "migrate:rollback": "cross-env NODE_OPTIONS=\"-r ts-node/register\" knex migrate:rollback",
     "migrate:make": "cross-env NODE_OPTIONS=\"-r ts-node/register\" knex migrate:make",
-    "seed": "cross-env NODE_OPTIONS=\"-r ts-node/register\" knex seed:run",
+    "seed": "node scripts/ensure-db.js && cross-env NODE_OPTIONS=\"-r ts-node/register\" knex seed:run",
     "test": "jest",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\""

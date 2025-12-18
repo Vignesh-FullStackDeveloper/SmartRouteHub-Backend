@@ -200,7 +200,7 @@ export class RoleService {
    * Delete a role (only if not assigned to any users)
    * Only superadmin can delete default roles. Organization admin can only delete custom roles.
    */
-  async delete(organizationCode: string, id: string, userRole: 'superadmin' | 'admin'): Promise<void> {
+  async delete(organizationCode: string, id: string, userRole: 'superadmin' | 'admin', userEmail?: string): Promise<void> {
     const db = this.getOrgDb(organizationCode);
 
     // Get the role to check its type and allow_delete
@@ -212,8 +212,12 @@ export class RoleService {
       throw new Error('Role not found');
     }
 
+    // Check if user is the default superadmin (by email)
+    // The default superadmin user has email 'superadmin@smartroutehub.com' and can delete default roles
+    const isDefaultSuperadmin = userEmail === 'superadmin@smartroutehub.com';
+
     // Check if role can be deleted based on type and allow_delete
-    // Only superadmin can delete default roles
+    // Only superadmin (from main DB) or default superadmin (by email) can delete default roles
     // Handle cases where type or allow_delete might be null (for existing roles before migration)
     // Default roles are: organization_admin, parent, driver
     const isDefaultRoleName = ['organization_admin', 'parent', 'driver'].includes(role.name);
@@ -221,7 +225,8 @@ export class RoleService {
     const canDelete = role.allow_delete !== false && (role.allow_delete !== null || !isDefaultRoleName);
     
     if (roleType === 'default' || !canDelete) {
-      if (userRole !== 'superadmin') {
+      // Allow deletion if user is superadmin from main DB OR default superadmin by email
+      if (userRole !== 'superadmin' && !isDefaultSuperadmin) {
         throw new Error(`Cannot delete ${roleType} role "${role.name}": Only superadmin can delete default roles. Organization admins can only delete custom roles.`);
       }
     }

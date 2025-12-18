@@ -9,7 +9,7 @@ import { Knex } from 'knex';
  * 
  * This seed is kept for backward compatibility but does nothing.
  */
-export async function seed(knex: Knex): Promise<void> {
+export async function seed(_knex: Knex): Promise<void> {
   // Permissions and role_permissions are no longer used
   // Features and roles are now in organization databases
   // This seed is kept for backward compatibility

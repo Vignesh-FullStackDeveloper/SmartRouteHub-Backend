@@ -79,16 +79,26 @@ The application automatically selects the correct file based on `NODE_ENV`.
 
 ### Default Superadmin
 
-After first startup:
+When an organization is created, a default superadmin user is automatically created in that organization's database:
 - **Email**: `superadmin@smartroutehub.com`
 - **Password**: `SuperAdmin@123`
+- **Note**: This user is created in each organization's database and is not displayed in the UI
 - ⚠️ **Change password after first login!**
 
 ### Login via Swagger
 
 1. Open http://localhost:3000/docs
 2. Click `POST /api/auth/login`
-3. Enter credentials and execute
+3. Enter credentials with organization code:
+   ```json
+   {
+     "data": {
+       "email": "superadmin@smartroutehub.com",
+       "password": "SuperAdmin@123",
+       "organizationCode": "your_org_code"
+     }
+   }
+   ```
 4. Copy the `token` from response
 5. Click "Authorize" → Enter: `Bearer <token>`
 
@@ -99,9 +109,11 @@ After first startup:
 With `AUTO_INIT_DB=true` (default), the server automatically:
 1. Creates main database if it doesn't exist
 2. Runs all pending migrations
-3. Runs seed files (creates superadmin)
+3. Runs seed files
 
 **No manual setup needed!**
+
+**Note**: The superadmin user is automatically created in each organization's database when the organization is created, not in the main database.
 
 ### Manual Commands
 

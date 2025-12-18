@@ -45,7 +45,7 @@ export function sendErrorResponse(reply: FastifyReply, error: Error | AppError |
     message = error.message;
     
     // Determine status code based on error message patterns
-    if (error.message.includes('not found')) {
+    if (error.message.includes('not found') || error.message.includes('Waypoint not found')) {
       statusCode = 404;
       code = 'NOT_FOUND';
     } else if (error.message.includes('already exists') || error.message.includes('duplicate')) {
@@ -67,7 +67,7 @@ export function sendErrorResponse(reply: FastifyReply, error: Error | AppError |
           code: err.code,
         }));
       }
-    } else if (error.message.includes('required') || error.message.includes('missing')) {
+    } else if (error.message.includes('required') || error.message.includes('missing') || error.message.includes('Parent contact unavailable')) {
       statusCode = 400;
       code = 'BAD_REQUEST';
     }

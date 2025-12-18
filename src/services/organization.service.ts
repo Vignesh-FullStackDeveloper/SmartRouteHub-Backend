@@ -3,8 +3,6 @@ import { DatabaseService } from './database.service';
 import { Organization } from '../types';
 import { logger } from '../config/logger';
 import { AuthService } from './auth.service';
-import knex, { Knex } from 'knex';
-import { appConfig } from '../config';
 import { PERMISSIONS } from '../rbac/permissions';
 
 export class OrganizationService {
@@ -126,6 +124,26 @@ export class OrganizationService {
       });
     }
 
+    // Always create default superadmin user for the organization
+    try {
+      await this.createDefaultSuperadmin(organization.id, organization.code);
+      logger.info({
+        message: 'Default superadmin user created successfully',
+        organizationId: organization.id,
+        code: organization.code,
+      });
+    } catch (error: any) {
+      logger.error({
+        message: 'Failed to create default superadmin user',
+        error: error.message,
+        stack: error.stack,
+        organizationId: organization.id,
+        code: organization.code,
+      });
+      // Don't fail organization creation if superadmin creation fails
+      // It's a convenience feature, not critical
+    }
+
     logger.info({
       message: 'Organization created',
       organizationId: organization.id,
@@ -225,6 +243,82 @@ export class OrganizationService {
         stack: error.stack,
         organizationCode,
         adminEmail: adminData.email,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Create default superadmin user in organization database
+   * This user is created automatically for every organization
+   * and is not displayed in the UI
+   */
+  private async createDefaultSuperadmin(
+    organizationId: string,
+    organizationCode: string
+  ): Promise<void> {
+    const orgDb = this.databaseService.getOrganizationDatabase(organizationCode);
+    const superadminEmail = 'superadmin@smartroutehub.com';
+    const superadminPassword = 'SuperAdmin@123';
+
+    try {
+      // Check if superadmin already exists
+      const existing = await orgDb('users')
+        .where({ email: superadminEmail })
+        .first();
+      
+      if (existing) {
+        logger.info({
+          message: 'Default superadmin user already exists',
+          organizationCode,
+          userId: existing.id,
+        });
+        return;
+      }
+
+      // Hash password
+      const passwordHash = await this.authService.hashPassword(superadminPassword);
+
+      // Get organization_admin role
+      const orgAdminRole = await orgDb('roles')
+        .where({ name: 'organization_admin' })
+        .first();
+
+      if (!orgAdminRole) {
+        logger.error({
+          message: 'Organization admin role not found for superadmin creation',
+          organizationCode,
+          organizationId,
+        });
+        throw new Error('Organization admin role not found. Please ensure permissions were initialized.');
+      }
+
+      // Create superadmin user with organization_admin role
+      const [user] = await orgDb('users')
+        .insert({
+          email: superadminEmail,
+          name: 'Super Admin',
+          password_hash: passwordHash,
+          role: 'admin',
+          role_id: orgAdminRole.id, // Assign organization_admin role
+          is_active: true,
+        })
+        .returning('*');
+
+      logger.info({
+        message: 'Default superadmin user created',
+        userId: user.id,
+        email: user.email,
+        roleId: user.role_id,
+        organizationCode,
+      });
+    } catch (error: any) {
+      logger.error({
+        message: 'Error creating default superadmin user',
+        error: error.message,
+        stack: error.stack,
+        organizationCode,
+        organizationId,
       });
       throw error;
     }

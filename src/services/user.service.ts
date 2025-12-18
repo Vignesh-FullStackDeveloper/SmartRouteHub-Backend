@@ -1,4 +1,3 @@
-import { UserRepository } from '../repositories/user.repository';
 import { AuthService } from './auth.service';
 import { DatabaseService } from './database.service';
 import { OrganizationService } from './organization.service';
@@ -7,14 +6,12 @@ import { User } from '../types';
 import { logger } from '../config/logger';
 
 export class UserService {
-  private repository: UserRepository;
   private authService: AuthService;
   private databaseService: DatabaseService;
   private organizationService: OrganizationService;
   private studentService: StudentService;
 
   constructor() {
-    this.repository = new UserRepository();
     this.authService = new AuthService();
     this.databaseService = new DatabaseService();
     this.organizationService = new OrganizationService();
@@ -101,6 +98,9 @@ export class UserService {
     const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
 
     let query = orgDb('users').select('*');
+
+    // Exclude default superadmin user from UI (not displayed)
+    query = query.whereNot({ email: 'superadmin@smartroutehub.com' });
 
     if (filters?.role) {
       query = query.where({ role: filters.role });

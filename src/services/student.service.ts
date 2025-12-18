@@ -1,15 +1,18 @@
 import { OrganizationService } from './organization.service';
 import { DatabaseService } from './database.service';
+import { RouteService } from './route.service';
 import { Student } from '../types';
 import { logger } from '../config/logger';
 
 export class StudentService {
   private organizationService: OrganizationService;
   private databaseService: DatabaseService;
+  private routeService: RouteService;
 
   constructor() {
     this.organizationService = new OrganizationService();
     this.databaseService = new DatabaseService();
+    this.routeService = new RouteService();
   }
 
   async create(data: {
@@ -17,7 +20,7 @@ export class StudentService {
     class_grade: string;
     section: string;
     parent_id: string;
-    parent_contact: string;
+    parent_contact?: string;
     pickup_point_id?: string;
     assigned_bus_id?: string;
     assigned_route_id?: string;
@@ -37,6 +40,31 @@ export class StudentService {
         throw new Error('Parent not found or invalid');
       }
 
+      // Auto-populate parent_contact from parent if not provided
+      let parent_contact = data.parent_contact;
+      if (!parent_contact) {
+        parent_contact = parent.phone || parent.email || null;
+        if (!parent_contact) {
+          throw new Error('Parent contact unavailable: Parent does not have phone or email to use as contact');
+        }
+      }
+
+      // Auto-assign route and bus from pickup_point_id if provided
+      let assigned_route_id = data.assigned_route_id;
+      let assigned_bus_id = data.assigned_bus_id;
+
+      if (data.pickup_point_id) {
+        const route = await this.routeService.findByStopId(data.pickup_point_id, organizationId);
+        if (!route) {
+          throw new Error('Waypoint not found: The provided pickup_point_id does not exist in any route');
+        }
+        assigned_route_id = route.id;
+        // Auto-assign bus from route if route has an assigned bus
+        if (route.assigned_bus_id) {
+          assigned_bus_id = route.assigned_bus_id;
+        }
+      }
+
       // Create student in organization database
       const [student] = await orgDb('students')
         .insert({
@@ -44,10 +72,10 @@ export class StudentService {
           class_grade: data.class_grade,
           section: data.section,
           parent_id: data.parent_id,
-          parent_contact: data.parent_contact,
+          parent_contact: parent_contact,
           pickup_point_id: data.pickup_point_id || null,
-          assigned_bus_id: data.assigned_bus_id || null,
-          assigned_route_id: data.assigned_route_id || null,
+          assigned_bus_id: assigned_bus_id || null,
+          assigned_route_id: assigned_route_id || null,
           is_active: data.is_active !== undefined ? data.is_active : true,
         })
         .returning('*');
@@ -56,6 +84,8 @@ export class StudentService {
         message: 'Student created',
         studentId: student.id,
         organizationId,
+        autoAssignedRoute: !!assigned_route_id && !data.assigned_route_id,
+        autoAssignedBus: !!assigned_bus_id && !data.assigned_bus_id,
       });
 
       // Add organization_id for consistency with the Student type
@@ -149,9 +179,12 @@ export class StudentService {
     const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
     
     try {
+      const updateData: any = { ...data };
+
       // Verify parent exists and belongs to organization if parent_id is being updated
+      let parent = null;
       if (data.parent_id) {
-        const parent = await orgDb('users')
+        parent = await orgDb('users')
           .where({ id: data.parent_id, role: 'parent' })
           .first();
         
@@ -160,9 +193,47 @@ export class StudentService {
         }
       }
 
+      // Auto-populate parent_contact from parent if parent_id is provided but parent_contact is not
+      if (data.parent_id && !data.parent_contact) {
+        if (!parent) {
+          parent = await orgDb('users')
+            .where({ id: data.parent_id, role: 'parent' })
+            .first();
+        }
+        if (parent) {
+          const parent_contact = parent.phone || parent.email || null;
+          if (!parent_contact) {
+            throw new Error('Parent contact unavailable: Parent does not have phone or email to use as contact');
+          }
+          updateData.parent_contact = parent_contact;
+        }
+      }
+
+      // Auto-assign route and bus from pickup_point_id if provided
+      if (data.pickup_point_id !== undefined) {
+        if (data.pickup_point_id === null) {
+          // Explicitly removing pickup point - also remove route and bus assignments
+          updateData.assigned_route_id = null;
+          updateData.assigned_bus_id = null;
+        } else {
+          const route = await this.routeService.findByStopId(data.pickup_point_id, organizationId);
+          if (!route) {
+            throw new Error('Waypoint not found: The provided pickup_point_id does not exist in any route');
+          }
+          updateData.assigned_route_id = route.id;
+          // Auto-assign bus from route if route has an assigned bus
+          if (route.assigned_bus_id) {
+            updateData.assigned_bus_id = route.assigned_bus_id;
+          } else {
+            // If route doesn't have a bus, clear bus assignment
+            updateData.assigned_bus_id = null;
+          }
+        }
+      }
+
       const [updated] = await orgDb('students')
         .where({ id })
-        .update(data)
+        .update(updateData)
         .returning('*');
       
       if (!updated) {
@@ -172,6 +243,8 @@ export class StudentService {
       logger.info({
         message: 'Student updated',
         studentId: updated.id,
+        autoAssignedRoute: data.pickup_point_id !== undefined && !data.assigned_route_id,
+        autoAssignedBus: data.pickup_point_id !== undefined && !data.assigned_bus_id,
       });
 
       return {

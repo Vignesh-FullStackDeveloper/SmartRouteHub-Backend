@@ -8,11 +8,9 @@ export class UserRepository extends BaseRepository<User> {
   }
 
   async findByEmail(email: string, organizationId: string): Promise<User | null> {
+    // Organization ID is always required (no main database superadmin)
     if (!organizationId) {
-      // For superadmin lookup
-      return this.db('users')
-        .where({ email, role: 'superadmin' })
-        .first() || null;
+      return null;
     }
     
     return this.db('users')

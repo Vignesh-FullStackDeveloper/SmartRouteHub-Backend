@@ -103,10 +103,8 @@ export async function authRoutes(fastify: FastifyInstance) {
         // Fetch user permissions based on their role
         let permissions: string[] = [];
         
-        if (user.role === 'superadmin') {
-          // Superadmin has all permissions (empty array means all permissions)
-          permissions = [];
-        } else if (organizationId && organizationCode) {
+        // All users are in organization databases now (no main database superadmin)
+        if (organizationId && organizationCode) {
           // For organization users, fetch permissions from their role
           try {
             const orgDb = databaseService.getOrganizationDatabase(organizationCode);
@@ -156,7 +154,7 @@ export async function authRoutes(fastify: FastifyInstance) {
        
         const jwtUser = {
           id: user.id,
-          organization_id: user.role === 'superadmin' ? null : (organizationId || (user as any).organization_id || null),
+          organization_id: organizationId || (user as any).organization_id || null,
           email: user.email,
           role: user.role,
         };

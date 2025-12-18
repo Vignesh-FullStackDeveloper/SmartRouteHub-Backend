@@ -1,15 +1,12 @@
 import bcrypt from 'bcryptjs';
-import { UserRepository } from '../repositories/user.repository';
 import { DatabaseService } from './database.service';
 import { User } from '../types';
 import { logger } from '../config/logger';
 
 export class AuthService {
-  private userRepository: UserRepository;
   private databaseService: DatabaseService;
 
   constructor() {
-    this.userRepository = new UserRepository();
     this.databaseService = new DatabaseService();
   }
 
@@ -24,16 +21,12 @@ export class AuthService {
 
       const hasOrganizationId = organizationId && organizationId.trim() !== '';
 
-      if (!hasOrganizationId) {
-        user = await this.userRepository.findByEmail(email, '');
-        if (user && user.role !== 'superadmin') {
-          throw new Error('Organization code required');
-        }
-        if (user && user.role === 'superadmin') {
-          organizationId = null as any; 
-        }
-      } else {
-        if (organizationCode) {
+      // Organization code is always required (no main database superadmin)
+      if (!hasOrganizationId || !organizationCode) {
+        throw new Error('Organization code is required');
+      }
+
+      if (organizationCode) {
           const orgDb = this.databaseService.getOrganizationDatabase(organizationCode);
           try {
             logger.debug({
@@ -65,11 +58,7 @@ export class AuthService {
           } finally {
             await orgDb.destroy();
           }
-        } else {
-          
-          user = await this.userRepository.findByEmail(email, organizationId!);
         }
-      }
 
       if (!user) {
         logger.warn({
@@ -101,7 +90,8 @@ export class AuthService {
         throw new Error('Invalid credentials');
       }
 
-      if (organizationCode && organizationId) {
+      // Update last login in organization database
+      if (organizationCode) {
         const orgDb = this.databaseService.getOrganizationDatabase(organizationCode);
         try {
           await orgDb('users')
@@ -110,8 +100,6 @@ export class AuthService {
         } finally {
           await orgDb.destroy();
         }
-      } else {
-        await this.userRepository.updateLastLogin(user.id);
       }
 
  

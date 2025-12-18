@@ -1,4 +1,3 @@
-import { Knex } from 'knex';
 import { appConfig } from '../config';
 import { logger } from '../config/logger';
 import knex from 'knex';
@@ -42,10 +41,11 @@ export class DatabaseInitService {
       } else {
         logger.debug({ message: 'Main database already exists', database: dbName });
       }
-    } catch (error: any) {
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error({
         message: 'Failed to ensure main database exists',
-        error: error.message,
+        error: errorMessage,
         database: appConfig.database.database,
       });
       throw error;
@@ -93,10 +93,11 @@ export class DatabaseInitService {
       }
       
       await migrationKnex.destroy();
-    } catch (error: any) {
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error({
         message: 'Failed to run migrations',
-        error: error.message,
+        error: errorMessage,
       });
       throw error;
     }
@@ -129,20 +130,22 @@ export class DatabaseInitService {
       // Run seeds
       const seedFiles = await seedKnex.seed.run();
       
-      if (seedFiles.length === 0) {
+      const seedFilesArray = Array.isArray(seedFiles) ? seedFiles : [];
+      if (seedFilesArray.length === 0) {
         logger.info({ message: 'No seeds to run' });
       } else {
         logger.info({
           message: 'Seeds completed successfully',
-          seedFiles,
+          seedFiles: seedFilesArray,
         });
       }
       
       await seedKnex.destroy();
-    } catch (error: any) {
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error({
         message: 'Failed to run seeds',
-        error: error.message,
+        error: errorMessage,
       });
       // Don't throw - seeds are optional
       logger.warn({ message: 'Continuing without seeds' });
@@ -164,10 +167,11 @@ export class DatabaseInitService {
       await this.runSeeds();
       
       logger.info({ message: 'Database initialization completed successfully' });
-    } catch (error: any) {
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       logger.error({
         message: 'Database initialization failed',
-        error: error.message,
+        error: errorMessage,
       });
       throw error;
     }

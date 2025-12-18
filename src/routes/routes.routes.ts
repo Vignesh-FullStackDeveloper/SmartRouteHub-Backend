@@ -61,10 +61,37 @@ const createRouteSchema = z.object({
     name: z.string(),
     latitude: z.number(),
     longitude: z.number(),
-    order: z.number().int().positive(),
+    order: z.number().int().min(0), // Allow 0 for start point
     estimated_arrival_minutes: z.number().int().optional(),
     address: z.record(z.any()).optional(),
-  })).optional(),
+  })).optional().refine(
+    (stops) => {
+      // If stops are provided, validate start and end points
+      if (!stops || stops.length === 0) {
+        return true; // Stops are optional
+      }
+      // Must have at least 2 stops (start and end point)
+      if (stops.length < 2) {
+        return false;
+      }
+      // Must have a start point (order: 0)
+      const hasStartPoint = stops.some(stop => stop.order === 0);
+      if (!hasStartPoint) {
+        return false;
+      }
+      // Must have an end point (highest order)
+      const orders = stops.map(stop => stop.order);
+      const maxOrder = Math.max(...orders);
+      const hasEndPoint = stops.some(stop => stop.order === maxOrder);
+      if (!hasEndPoint) {
+        return false;
+      }
+      return true;
+    },
+    {
+      message: 'Stops must include at least a start point (order: 0) and an end point (highest order). Waypoints are optional.',
+    }
+  ),
 });
 
 // Update schema with optional fields that still validate and transform when provided
@@ -80,10 +107,37 @@ const updateRouteSchema = z.object({
     name: z.string(),
     latitude: z.number(),
     longitude: z.number(),
-    order: z.number().int().positive(),
+    order: z.number().int().min(0), // Allow 0 for start point
     estimated_arrival_minutes: z.number().int().optional(),
     address: z.record(z.any()).optional(),
-  })).optional(),
+  })).optional().refine(
+    (stops) => {
+      // If stops are provided, validate start and end points
+      if (!stops || stops.length === 0) {
+        return true; // Stops are optional in updates
+      }
+      // Must have at least 2 stops (start and end point)
+      if (stops.length < 2) {
+        return false;
+      }
+      // Must have a start point (order: 0)
+      const hasStartPoint = stops.some(stop => stop.order === 0);
+      if (!hasStartPoint) {
+        return false;
+      }
+      // Must have an end point (highest order)
+      const orders = stops.map(stop => stop.order);
+      const maxOrder = Math.max(...orders);
+      const hasEndPoint = stops.some(stop => stop.order === maxOrder);
+      if (!hasEndPoint) {
+        return false;
+      }
+      return true;
+    },
+    {
+      message: 'Stops must include at least a start point (order: 0) and an end point (highest order). Waypoints are optional.',
+    }
+  ),
 });
 
 export async function routesRoutes(fastify: FastifyInstance) {
@@ -97,31 +151,38 @@ export async function routesRoutes(fastify: FastifyInstance) {
     {
       preHandler: [authenticate],
       schema: {
-        description: 'Create a new route with stops',
+        description: 'Create a new route with stops. Payload should be wrapped in a "data" object. Start point (order: 0) and end point (highest order) are mandatory when stops are provided. Waypoints are optional.',
         tags: ['Routes'],
         security: [{ bearerAuth: [] }],
         body: {
           type: 'object',
-          required: ['name', 'start_time', 'end_time'],
+          required: ['data'],
           properties: {
-            name: { type: 'string' },
-            start_time: { type: 'string', pattern: '^([0-1]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$', description: 'Time in HH:MM or HH:MM:SS format (e.g., 07:00 or 07:00:00)' },
-            end_time: { type: 'string', pattern: '^([0-1]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$', description: 'Time in HH:MM or HH:MM:SS format (e.g., 20:30 or 20:30:00)' },
-            estimated_duration_minutes: { type: 'integer', minimum: 1 },
-            total_distance_km: { type: 'number', minimum: 0 },
-            assigned_bus_id: { type: 'string', format: 'uuid' },
-            route_polyline: { type: 'string' },
-            stops: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  name: { type: 'string' },
-                  latitude: { type: 'number' },
-                  longitude: { type: 'number' },
-                  order: { type: 'integer', minimum: 1 },
-                  estimated_arrival_minutes: { type: 'integer' },
-                  address: { type: 'object' },
+            data: {
+              type: 'object',
+              required: ['name', 'start_time', 'end_time'],
+              properties: {
+                name: { type: 'string' },
+                start_time: { type: 'string', pattern: '^([0-1]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$', description: 'Time in HH:MM or HH:MM:SS format (e.g., 07:00 or 07:00:00)' },
+                end_time: { type: 'string', pattern: '^([0-1]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$', description: 'Time in HH:MM or HH:MM:SS format (e.g., 20:30 or 20:30:00)' },
+                estimated_duration_minutes: { type: 'integer', minimum: 1 },
+                total_distance_km: { type: 'number', minimum: 0 },
+                assigned_bus_id: { type: 'string', format: 'uuid', description: 'Optional: UUID of assigned bus. Route can exist without an assigned bus.' },
+                route_polyline: { type: 'string' },
+                stops: {
+                  type: 'array',
+                  description: 'Array of stops. Must include start point (order: 0) and end point (highest order). Waypoints are optional.',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      name: { type: 'string' },
+                      latitude: { type: 'number' },
+                      longitude: { type: 'number' },
+                      order: { type: 'integer', minimum: 0, description: 'Order of the stop. Must be 0 for start point, highest value for end point.' },
+                      estimated_arrival_minutes: { type: 'integer' },
+                      address: { type: 'object' },
+                    },
+                  },
                 },
               },
             },
@@ -507,7 +568,7 @@ export async function routesRoutes(fastify: FastifyInstance) {
             end_time: { type: 'string', pattern: '^([0-1]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$', description: 'Time in HH:MM or HH:MM:SS format (e.g., 20:30 or 20:30:00)' },
             estimated_duration_minutes: { type: 'integer', minimum: 1 },
             total_distance_km: { type: 'number', minimum: 0 },
-            assigned_bus_id: { type: 'string', format: 'uuid' },
+            assigned_bus_id: { type: 'string', format: 'uuid', description: 'Optional: UUID of assigned bus. If not provided, existing assignment will not be changed.' },
             route_polyline: { type: 'string' },
             stops: {
               type: 'array',

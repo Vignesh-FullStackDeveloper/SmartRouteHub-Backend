@@ -17,10 +17,10 @@ const createStudentSchema = z.object({
   class_grade: z.string().min(1),
   section: z.string().min(1),
   parent_id: z.string().uuid(),
-  parent_contact: z.string().min(1),
+  parent_contact: z.string().min(1).optional(), // Optional - will be auto-populated from parent if not provided
   pickup_point_id: z.string().uuid().optional(),
   assigned_bus_id: z.string().uuid().optional(),
-  assigned_route_id: z.string().uuid().optional(),
+  assigned_route_id: z.string().uuid().optional(), // Optional - will be auto-assigned from pickup_point_id if provided
   is_active: z.boolean().optional(),
 });
 
@@ -28,11 +28,11 @@ const updateStudentSchema = z.object({
   name: z.string().min(1).optional(),
   class_grade: z.string().min(1).optional(),
   section: z.string().min(1).optional(),
-  parent_id: z.string().uuid(),
-  parent_contact: z.string().min(1).optional(),
-  pickup_point_id: z.string().uuid().optional(),
+  parent_id: z.string().uuid().optional(),
+  parent_contact: z.string().min(1).optional(), // Optional - will be auto-populated from parent if parent_id is provided
+  pickup_point_id: z.string().uuid().nullable().optional(), // Can be null to remove assignment
   assigned_bus_id: z.string().uuid().optional(),
-  assigned_route_id: z.string().uuid().optional(),
+  assigned_route_id: z.string().uuid().optional(), // Optional - will be auto-assigned from pickup_point_id if provided
   is_active: z.boolean().optional(),
 });
 
@@ -111,27 +111,27 @@ export async function studentsRoutes(fastify: FastifyInstance) {
             content: {
               'application/json': {
                 schema: {
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              data: {
+                type: 'array',
+                items: {
                   type: 'object',
-                  properties: {
-                    success: { type: 'boolean' },
-                    data: {
-                      type: 'array',
-                      items: {
-                        type: 'object',
                         additionalProperties: true,
-                      },
-                    },
-                    pagination: {
-                      type: 'object',
-                      nullable: true,
-                      properties: {
-                        total: { type: 'number' },
-                        limit: { type: 'number' },
-                        offset: { type: 'number' },
-                        hasMore: { type: 'boolean' },
-                      },
-                    },
-                    message: { type: 'string', nullable: true },
+                },
+              },
+              pagination: {
+                type: 'object',
+                nullable: true,
+                properties: {
+                  total: { type: 'number' },
+                  limit: { type: 'number' },
+                  offset: { type: 'number' },
+                  hasMore: { type: 'boolean' },
+                },
+              },
+              message: { type: 'string', nullable: true },
                   },
                 },
               },
@@ -170,7 +170,7 @@ export async function studentsRoutes(fastify: FastifyInstance) {
         if (query.route_id) basicFilters.route_id = query.route_id;
         if (query.class_grade) basicFilters.class_grade = query.class_grade;
         if (query.is_active !== undefined) basicFilters.is_active = query.is_active === 'true' || query.is_active === true;
-        
+
         // Check permissions in descending order of authority
         if (hasPermission(user, PERMISSIONS.STUDENT.GET_ALL)) {
           // Highest level: return full dataset with pagination
@@ -353,11 +353,11 @@ export async function studentsRoutes(fastify: FastifyInstance) {
             content: {
               'application/json': {
                 schema: {
-                  type: 'object',
-                  properties: {
+            type: 'object',
+            properties: {
                     success: { type: 'boolean' },
-                    message: { type: 'string' },
-                  },
+              message: { type: 'string' },
+            },
                   required: ['success', 'message'],
                 },
               },
@@ -407,25 +407,25 @@ export async function studentsRoutes(fastify: FastifyInstance) {
             content: {
               'application/json': {
                 schema: {
-                  type: 'object',
-                  properties: {
-                    student: {
-                      type: 'object',
-                      properties: {
+            type: 'object',
+            properties: {
+              student: {
+                type: 'object',
+                properties: {
                         id: { type: 'string', format: 'uuid' },
-                        name: { type: 'string' },
+                  name: { type: 'string' },
                         pickup_point_id: { type: 'string', format: 'uuid', nullable: true },
-                      },
+                },
                       required: ['id', 'name'],
-                    },
-                    pickup_location: {
-                      type: 'object',
-                      nullable: true,
-                      properties: {
+              },
+              pickup_location: {
+                type: 'object',
+                nullable: true,
+                properties: {
                         id: { type: 'string', format: 'uuid' },
-                        name: { type: 'string' },
-                        latitude: { type: 'number' },
-                        longitude: { type: 'number' },
+                  name: { type: 'string' },
+                  latitude: { type: 'number' },
+                  longitude: { type: 'number' },
                         address: { type: 'object', additionalProperties: true },
                       },
                     },
