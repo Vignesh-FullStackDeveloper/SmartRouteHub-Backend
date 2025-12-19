@@ -59,6 +59,25 @@ export class RouteService {
           })
           .returning('*');
 
+        // Sync bus.assigned_route_id if assigned_bus_id is set
+        if (data.assigned_bus_id) {
+          // Clear assignment from previous route if bus was assigned elsewhere
+          const previousRoute = await trx('routes')
+            .where({ assigned_bus_id: data.assigned_bus_id })
+            .whereNot({ id: route.id })
+            .first();
+          if (previousRoute) {
+            await trx('routes')
+              .where({ id: previousRoute.id })
+              .update({ assigned_bus_id: null });
+          }
+
+          // Update bus to point back to this route
+          await trx('buses')
+            .where({ id: data.assigned_bus_id })
+            .update({ assigned_route_id: route.id });
+        }
+
         let stops: Stop[] = [];
         if (data.stops && data.stops.length > 0) {
           const stopsToInsert = data.stops.map((stop) => ({
@@ -162,8 +181,20 @@ export class RouteService {
             address: s.address ? (typeof s.address === 'string' ? JSON.parse(s.address) : s.address) : null,
           })));
 
+        // Auto-populate assigned_bus_id if null but a bus exists with assigned_route_id matching this route
+        let assignedBusId = route.assigned_bus_id;
+        if (!assignedBusId) {
+          const bus = await orgDb('buses')
+            .where({ assigned_route_id: route.id })
+            .first();
+          if (bus) {
+            assignedBusId = bus.id;
+          }
+        }
+
         return {
           ...route,
+          assigned_bus_id: assignedBusId,
           organization_id: organizationId,
           stops,
         };
@@ -192,8 +223,20 @@ export class RouteService {
           address: s.address ? (typeof s.address === 'string' ? JSON.parse(s.address) : s.address) : null,
         })));
 
+      // Auto-populate assigned_bus_id if null but a bus exists with assigned_route_id matching this route
+      let assignedBusId = route.assigned_bus_id;
+      if (!assignedBusId) {
+        const bus = await orgDb('buses')
+          .where({ assigned_route_id: route.id })
+          .first();
+        if (bus) {
+          assignedBusId = bus.id;
+        }
+      }
+
       return {
         ...route,
+        assigned_bus_id: assignedBusId,
         organization_id: organizationId,
         stops,
       } as Route & { stops: Stop[] };
@@ -237,6 +280,16 @@ export class RouteService {
       const trx = await orgDb.transaction();
 
       try {
+        // Get current route to check for changes
+        const currentRoute = await trx('routes')
+          .where({ id })
+          .first();
+
+        if (!currentRoute) {
+          await trx.rollback();
+          throw new Error('Route not found');
+        }
+
         const [updated] = await trx('routes')
           .where({ id })
           .update(routeData)
@@ -245,6 +298,40 @@ export class RouteService {
         if (!updated) {
           await trx.rollback();
           throw new Error('Route not found');
+        }
+
+        // Handle bidirectional sync for assigned_bus_id
+        if ('assigned_bus_id' in routeData) {
+          const newBusId = routeData.assigned_bus_id || null;
+          const oldBusId = currentRoute.assigned_bus_id;
+
+          if (newBusId !== oldBusId) {
+            // Clear assignment from old bus if it exists
+            if (oldBusId) {
+              await trx('buses')
+                .where({ id: oldBusId })
+                .update({ assigned_route_id: null });
+            }
+
+            // Set assignment on new bus if provided
+            if (newBusId) {
+              // Clear assignment from previous route if bus was assigned elsewhere
+              const previousRoute = await trx('routes')
+                .where({ assigned_bus_id: newBusId })
+                .whereNot({ id })
+                .first();
+              if (previousRoute) {
+                await trx('routes')
+                  .where({ id: previousRoute.id })
+                  .update({ assigned_bus_id: null });
+              }
+
+              // Update bus to point back to this route
+              await trx('buses')
+                .where({ id: newBusId })
+                .update({ assigned_route_id: id });
+            }
+          }
         }
 
         let updatedStops: Stop[] = [];
@@ -328,6 +415,7 @@ export class RouteService {
 
   /**
    * Get routes by bus ID - Micro function
+   * Finds routes where either route.assigned_bus_id = busId OR bus.assigned_route_id = route.id
    */
   async getByBusId(busId: string, organizationId: string, pagination?: {
     limit?: number;
@@ -337,7 +425,19 @@ export class RouteService {
     const orgDb = this.databaseService.getOrganizationDatabase(organization.code);
     
     try {
-      let query = orgDb('routes').where({ assigned_bus_id: busId });
+      // Find routes where either:
+      // 1. route.assigned_bus_id = busId (route has bus assigned)
+      // 2. OR bus.assigned_route_id = route.id (bus is assigned to route)
+      let query = orgDb('routes')
+        .where(function() {
+          this.where({ assigned_bus_id: busId })
+            .orWhereIn('id', function() {
+              this.select('assigned_route_id')
+                .from('buses')
+                .where({ id: busId })
+                .whereNotNull('assigned_route_id');
+            });
+        });
 
       // Get total count
       const countResult = await query.clone().count('* as total').first();
@@ -396,8 +496,20 @@ export class RouteService {
           address: s.address ? (typeof s.address === 'string' ? JSON.parse(s.address) : s.address) : null,
         })));
 
+      // Auto-populate assigned_bus_id if null but a bus exists with assigned_route_id matching this route
+      let assignedBusId = route.assigned_bus_id;
+      if (!assignedBusId) {
+        const bus = await orgDb('buses')
+          .where({ assigned_route_id: route.id })
+          .first();
+        if (bus) {
+          assignedBusId = bus.id;
+        }
+      }
+
       const routeWithStops = {
         ...route,
+        assigned_bus_id: assignedBusId,
         organization_id: organizationId,
         stops,
       };
@@ -448,8 +560,20 @@ export class RouteService {
           address: s.address ? (typeof s.address === 'string' ? JSON.parse(s.address) : s.address) : null,
         })));
 
+      // Auto-populate assigned_bus_id if null but a bus exists with assigned_route_id matching this route
+      let assignedBusId = route.assigned_bus_id;
+      if (!assignedBusId) {
+        const bus = await orgDb('buses')
+          .where({ assigned_route_id: route.id })
+          .first();
+        if (bus) {
+          assignedBusId = bus.id;
+        }
+      }
+
       return {
         ...route,
+        assigned_bus_id: assignedBusId,
         organization_id: organizationId,
         stops,
       } as Route & { stops: Stop[] };
@@ -528,8 +652,19 @@ export class RouteService {
       }
 
       // Step 2: Get routes for these buses
+      // Find routes where either:
+      // 1. route.assigned_bus_id is in busIds (route has bus assigned)
+      // 2. OR bus.assigned_route_id = route.id AND bus.id is in busIds (bus is assigned to route)
       let query = orgDb('routes')
-        .whereIn('assigned_bus_id', busIds);
+        .where(function() {
+          this.whereIn('assigned_bus_id', busIds)
+            .orWhereIn('id', function() {
+              this.select('assigned_route_id')
+                .from('buses')
+                .whereIn('id', busIds)
+                .whereNotNull('assigned_route_id');
+            });
+        });
 
       // Get total count
       const countResult = await query.clone().count('* as total').first();

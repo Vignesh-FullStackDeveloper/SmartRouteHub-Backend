@@ -42,28 +42,66 @@ export class BusService {
         }
       }
 
-      const [bus] = await orgDb('buses')
-        .insert({
-          bus_number: data.bus_number,
-          capacity: data.capacity,
-          driver_id: data.driver_id || null,
-          assigned_route_id: data.assigned_route_id || null,
-          metadata: data.metadata ? JSON.stringify(data.metadata) : null,
-          is_active: data.is_active !== undefined ? data.is_active : true,
-        })
-        .returning('*');
+      // Verify route exists if assigned_route_id is provided
+      if (data.assigned_route_id) {
+        const route = await orgDb('routes')
+          .where({ id: data.assigned_route_id })
+          .first();
+        if (!route) {
+          throw new Error('Route not found or invalid');
+        }
+      }
 
-      logger.info({
-        message: 'Bus created',
-        busId: bus.id,
-        busNumber: bus.bus_number,
-      });
+      const trx = await orgDb.transaction();
 
-      return {
-        ...bus,
-        organization_id: organizationId,
-        metadata: bus.metadata ? (typeof bus.metadata === 'string' ? JSON.parse(bus.metadata) : bus.metadata) : null,
-      } as Bus;
+      try {
+        const [bus] = await trx('buses')
+          .insert({
+            bus_number: data.bus_number,
+            capacity: data.capacity,
+            driver_id: data.driver_id || null,
+            assigned_route_id: data.assigned_route_id || null,
+            metadata: data.metadata ? JSON.stringify(data.metadata) : null,
+            is_active: data.is_active !== undefined ? data.is_active : true,
+          })
+          .returning('*');
+
+        // Sync route.assigned_bus_id if assigned_route_id is set
+        if (data.assigned_route_id) {
+          // Clear assignment from previous bus if route was assigned elsewhere
+          const previousBus = await trx('buses')
+            .where({ assigned_route_id: data.assigned_route_id })
+            .whereNot({ id: bus.id })
+            .first();
+          if (previousBus) {
+            await trx('buses')
+              .where({ id: previousBus.id })
+              .update({ assigned_route_id: null });
+          }
+
+          // Update route to point back to this bus
+          await trx('routes')
+            .where({ id: data.assigned_route_id })
+            .update({ assigned_bus_id: bus.id });
+        }
+
+        await trx.commit();
+
+        logger.info({
+          message: 'Bus created',
+          busId: bus.id,
+          busNumber: bus.bus_number,
+        });
+
+        return {
+          ...bus,
+          organization_id: organizationId,
+          metadata: bus.metadata ? (typeof bus.metadata === 'string' ? JSON.parse(bus.metadata) : bus.metadata) : null,
+        } as Bus;
+      } catch (error) {
+        await trx.rollback();
+        throw error;
+      }
     } finally {
       await orgDb.destroy();
     }
@@ -320,30 +358,96 @@ export class BusService {
         }
       }
 
-      const updateData: any = { ...data };
-      if (updateData.metadata && typeof updateData.metadata === 'object') {
-        updateData.metadata = JSON.stringify(updateData.metadata);
+      // Verify route exists if assigned_route_id is being updated
+      if (data.assigned_route_id !== undefined) {
+        if (data.assigned_route_id) {
+          const route = await orgDb('routes')
+            .where({ id: data.assigned_route_id })
+            .first();
+          if (!route) {
+            throw new Error('Route not found or invalid');
+          }
+        }
       }
 
-      const [updated] = await orgDb('buses')
-        .where({ id })
-        .update(updateData)
-        .returning('*');
-      
-      if (!updated) {
-        throw new Error('Bus not found');
+      const trx = await orgDb.transaction();
+
+      try {
+        // Get current bus to check for changes
+        const currentBus = await trx('buses')
+          .where({ id })
+          .first();
+
+        if (!currentBus) {
+          await trx.rollback();
+          throw new Error('Bus not found');
+        }
+
+        const updateData: any = { ...data };
+        if (updateData.metadata && typeof updateData.metadata === 'object') {
+          updateData.metadata = JSON.stringify(updateData.metadata);
+        }
+
+        const [updated] = await trx('buses')
+          .where({ id })
+          .update(updateData)
+          .returning('*');
+        
+        if (!updated) {
+          await trx.rollback();
+          throw new Error('Bus not found');
+        }
+
+        // Handle bidirectional sync for assigned_route_id
+        if ('assigned_route_id' in data) {
+          const newRouteId = data.assigned_route_id || null;
+          const oldRouteId = currentBus.assigned_route_id;
+
+          if (newRouteId !== oldRouteId) {
+            // Clear assignment from old route if it exists
+            if (oldRouteId) {
+              await trx('routes')
+                .where({ id: oldRouteId })
+                .update({ assigned_bus_id: null });
+            }
+
+            // Set assignment on new route if provided
+            if (newRouteId) {
+              // Clear assignment from previous bus if route was assigned elsewhere
+              const previousBus = await trx('buses')
+                .where({ assigned_route_id: newRouteId })
+                .whereNot({ id })
+                .first();
+              if (previousBus) {
+                await trx('buses')
+                  .where({ id: previousBus.id })
+                  .update({ assigned_route_id: null });
+              }
+
+              // Update route to point back to this bus
+              await trx('routes')
+                .where({ id: newRouteId })
+                .update({ assigned_bus_id: id });
+            }
+          }
+        }
+
+        await trx.commit();
+
+        logger.info({
+          message: 'Bus updated',
+          busId: updated.id,
+        });
+
+        return {
+          ...updated,
+          organization_id: organizationId,
+          metadata: updated.metadata ? (typeof updated.metadata === 'string' ? JSON.parse(updated.metadata) : updated.metadata) : null,
+        } as Bus;
+      } catch (error) {
+        await trx.rollback();
+        throw error;
       }
-
-      logger.info({
-        message: 'Bus updated',
-        busId: updated.id,
-      });
-
-      return {
-        ...updated,
-        organization_id: organizationId,
-        metadata: updated.metadata ? (typeof updated.metadata === 'string' ? JSON.parse(updated.metadata) : updated.metadata) : null,
-      } as Bus;
     } finally {
       await orgDb.destroy();
     }
